@@ -193,6 +193,7 @@ class Player {
   velocity: THREE.Vector3;
   onGround: boolean;
   direction: THREE.Vector3;
+  pressingDown: boolean;
 
   constructor(scene: THREE.Scene, color: number, startX: number) {
     const geometry = new THREE.SphereGeometry(0.5);
@@ -202,6 +203,7 @@ class Player {
     this.velocity = new THREE.Vector3(0, 0, 0);
     this.onGround = true;
     this.direction = new THREE.Vector3(1, 0, 0);
+    this.pressingDown = false;
     scene.add(this.mesh);
   }
 
@@ -211,17 +213,38 @@ class Player {
     }
 
     const nextPosition = this.mesh.position.clone().add(this.velocity);
+    const playerRadius = 0.5;
 
     this.onGround = false;
     platforms.forEach(platform => {
-      if (nextPosition.x >= platform.left && 
-          nextPosition.x <= platform.right && 
-          nextPosition.y >= platform.bottom &&
-          nextPosition.y <= platform.top) {
-        if (this.velocity.y < 0) {
-          nextPosition.y = platform.top;
+      const playerLeft = nextPosition.x - playerRadius;
+      const playerRight = nextPosition.x + playerRadius;
+      const playerTop = nextPosition.y + playerRadius;
+      const playerBottom = nextPosition.y - playerRadius;
+
+      if (playerRight >= platform.left && playerLeft <= platform.right) {
+        if (!this.pressingDown && playerBottom <= platform.top && 
+            this.mesh.position.y - playerRadius > platform.top) {
+          nextPosition.y = platform.top + playerRadius;
           this.velocity.y = 0;
           this.onGround = true;
+        } 
+        else if (playerTop >= platform.bottom && 
+                 this.mesh.position.y + playerRadius < platform.bottom) {
+          nextPosition.y = platform.bottom - playerRadius;
+          this.velocity.y = 0;
+        }
+      }
+
+      if (playerTop >= platform.bottom && playerBottom <= platform.top) {
+        if (playerRight >= platform.left && 
+            this.mesh.position.x + playerRadius < platform.left) {
+          nextPosition.x = platform.left - playerRadius;
+          this.velocity.x = 0;
+        } else if (playerLeft <= platform.right && 
+                   this.mesh.position.x - playerRadius > platform.right) {
+          nextPosition.x = platform.right + playerRadius;
+          this.velocity.x = 0;
         }
       }
     });
@@ -259,6 +282,44 @@ class Player {
 
   castSpell(scene: THREE.Scene) {
     return new Spell(scene, this.mesh.position, this.direction);
+  }
+}
+
+// Add a new class for moving walls
+class MovingWall implements Platform {
+  mesh: THREE.Mesh;
+  baseY: number;
+  amplitude: number;
+  frequency: number;
+  top: number = 0;
+  bottom: number = 0;
+  left: number;
+  right: number;
+
+  constructor(scene: THREE.Scene, x: number, baseY: number = 2) {
+    const geometry = new THREE.BoxGeometry(0.5, 4, 1);
+    const material = new THREE.MeshPhongMaterial({ color: 0x808080 });
+    this.mesh = new THREE.Mesh(geometry, material);
+    this.mesh.position.set(x, baseY, 0);
+    scene.add(this.mesh);
+
+    this.baseY = baseY;
+    this.amplitude = 2;
+    this.frequency = 0.5;
+
+    // Set initial bounds
+    this.left = x - 0.25;
+    this.right = x + 0.25;
+    
+    // Initial position update
+    this.updateBounds(0);
+  }
+
+  updateBounds(time: number) {
+    const yOffset = Math.sin(time * this.frequency) * this.amplitude;
+    this.mesh.position.y = this.baseY + yOffset;
+    this.top = this.mesh.position.y + 2;
+    this.bottom = this.mesh.position.y - 2;
   }
 }
 
@@ -402,26 +463,8 @@ const SpyGame: React.FC = () => {
     const platforms = generatePlatforms();
 
     // Create half walls behind players
-    const createHalfWall = (x: number) => {
-      const wall = new THREE.Mesh(
-        new THREE.BoxGeometry(0.5, 4, 1),
-        new THREE.MeshPhongMaterial({ color: 0x808080 })
-      );
-      wall.position.set(x, 2, 0);
-      scene.add(wall);
-      
-      // Add collision bounds for the wall
-      return {
-        mesh: wall,
-        top: 4,
-        bottom: 0,
-        left: x - 0.25,
-        right: x + 0.25
-      };
-    };
-
-    const leftWall = createHalfWall(-9.5);
-    const rightWall = createHalfWall(9.5);
+    const leftWall = new MovingWall(scene, -9.5);
+    const rightWall = new MovingWall(scene, 9.5);
     
     // Add walls to platforms array for collision detection
     platforms.push(leftWall);
@@ -471,10 +514,12 @@ const SpyGame: React.FC = () => {
         case 'a': keys.player1.left = true; break;
         case 'd': keys.player1.right = true; break;
         case 'w': keys.player1.jump = true; break;
+        case 's': player1.pressingDown = true; break;
         case 'e': keys.player1.spell = true; break;
         case 'i': keys.player2.left = true; break;
         case 'l': keys.player2.right = true; break;
         case 'j': keys.player2.jump = true; break;
+        case 'k': player2.pressingDown = true; break;
         case 'o': keys.player2.spell = true; break;
       }
     };
@@ -484,10 +529,12 @@ const SpyGame: React.FC = () => {
         case 'a': keys.player1.left = false; break;
         case 'd': keys.player1.right = false; break;
         case 'w': keys.player1.jump = false; break;
+        case 's': player1.pressingDown = false; break;
         case 'e': keys.player1.spell = false; break;
         case 'i': keys.player2.left = false; break;
         case 'l': keys.player2.right = false; break;
         case 'j': keys.player2.jump = false; break;
+        case 'k': player2.pressingDown = false; break;
         case 'o': keys.player2.spell = false; break;
       }
     };
@@ -502,6 +549,12 @@ const SpyGame: React.FC = () => {
       const time = performance.now() * 0.001;
       backgroundPlane.material.uniforms.uTime.value = time;
       caveOverlay.material.uniforms.uTime.value = time;
+
+      // Update wall positions
+      leftWall.updateBounds(time);
+      rightWall.updateBounds(time);
+      // Phase shift the right wall so they move opposite each other
+      rightWall.updateBounds(time + Math.PI);
 
       if (keys.player1.left) player1.moveLeft();
       if (keys.player1.right) player1.moveRight();
@@ -543,7 +596,19 @@ const SpyGame: React.FC = () => {
             const normal = new THREE.Vector3()
               .subVectors(ball.mesh.position, spell.explosionMesh.position)
               .normalize();
-            ball.bounce(normal, 1.2);
+            
+            // Calculate how centered the hit was (1 = perfect center, 0 = edge)
+            const centeredness = 1 - (distance / spell.explosionRadius);
+            
+            // For perfect hits, override the normal to point directly at enemy goal
+            if (centeredness > 0.9) {
+              // Determine which player's spell it was based on x position
+              const isPlayer1Spell = spell.mesh.position.x < 0;
+              normal.set(isPlayer1Spell ? 1 : -1, 0, 0);
+              ball.bounce(normal, 2.0); // Extra speed for perfect hits
+            } else {
+              ball.bounce(normal, 1.2);
+            }
           }
         }
       });
