@@ -11,3 +11,12 @@ Two players compete to score points by getting the ball into their opponent's po
 - The map loops horizontally (go right, appear on left)
 
 ## Development
+
+Current State:
+![image](https://github.com/user-attachments/assets/1c3e152a-2099-44fb-a26b-18e71ab631bf)
+
+Mockups: 
+![image](https://github.com/user-attachments/assets/0cd515a0-557a-48b0-9029-40aaba9edae5)
+![image](https://github.com/user-attachments/assets/16da082f-7d87-4eaf-a666-359af44ec782)
+
+![image](https://github.com/user-attachments/assets/38a88564-b5a3-4584-b178-012b52c12632)
