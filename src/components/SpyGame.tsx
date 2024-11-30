@@ -37,7 +37,7 @@ class Spell {
   explosionMesh?: THREE.Mesh;
 
   constructor(scene: THREE.Scene, position: THREE.Vector3, direction: THREE.Vector3) {
-    const geometry = new THREE.SphereGeometry(0.2);
+    const geometry = new THREE.SphereGeometry(0.1);
     const material = new THREE.MeshBasicMaterial({ 
       color: 0xffff00,
       transparent: true,
@@ -46,21 +46,21 @@ class Spell {
     this.mesh = new THREE.Mesh(geometry, material);
     
     const spawnOffset = new THREE.Vector3(
-      direction.x * 1,
-      1,
+      direction.x * 0.6,
+      0.6,
       0
     );
     this.mesh.position.copy(position).add(spawnOffset);
     
     this.velocity = new THREE.Vector3(
-      direction.x * 0.3,
-      0.3,
+      direction.x * 0.2,
+      0.2,
       0
     );
     
-    this.lifetime = 30;
+    this.lifetime = 15;
     this.exploded = false;
-    this.explosionRadius = 1.5;
+    this.explosionRadius = 0.5;
     scene.add(this.mesh);
   }
 
@@ -115,9 +115,55 @@ class Ball {
     scene.add(this.mesh);
   }
 
-  update(gameHeight: number) {
-    this.mesh.position.add(this.velocity);
+  update(gameHeight: number, platforms: Platform[]) {
+    const nextPosition = this.mesh.position.clone().add(this.velocity);
+
+    // Check platform collisions
+    platforms.forEach(platform => {
+      // Ball's current bounds
+      const ballBottom = this.mesh.position.y - 0.3;
+      const ballTop = this.mesh.position.y + 0.3;
+      const ballLeft = this.mesh.position.x - 0.3;
+      const ballRight = this.mesh.position.x + 0.3;
+
+      // Ball's next bounds
+      const nextBallBottom = nextPosition.y - 0.3;
+      const nextBallTop = nextPosition.y + 0.3;
+      const nextBallLeft = nextPosition.x - 0.3;
+      const nextBallRight = nextPosition.x + 0.3;
+
+      // Collision checks
+      if (nextBallRight >= platform.left && nextBallLeft <= platform.right) {
+        // Vertical collision
+        if (nextBallBottom <= platform.top && ballBottom > platform.top) {
+          // Hitting platform from above
+          nextPosition.y = platform.top + 0.3;
+          this.velocity.y *= -1;
+        } else if (nextBallTop >= platform.bottom && ballTop < platform.bottom) {
+          // Hitting platform from below
+          nextPosition.y = platform.bottom - 0.3;
+          this.velocity.y *= -1;
+        }
+      }
+
+      if (nextBallTop >= platform.bottom && nextBallBottom <= platform.top) {
+        // Horizontal collision
+        if (nextBallRight >= platform.left && ballRight < platform.left) {
+          // Hitting platform from left
+          nextPosition.x = platform.left - 0.3;
+          this.velocity.x *= -1;
+        } else if (nextBallLeft <= platform.right && ballLeft > platform.right) {
+          // Hitting platform from right
+          nextPosition.x = platform.right + 0.3;
+          this.velocity.x *= -1;
+        }
+      }
+    });
+
+    // Update position after collision checks
+    this.mesh.position.copy(nextPosition);
     
+    // Existing wrapping and bounds checks
     if (this.mesh.position.x > 10) this.mesh.position.x = -10;
     if (this.mesh.position.x < -10) this.mesh.position.x = 10;
 
@@ -227,17 +273,88 @@ const SpyGame: React.FC = () => {
   React.useEffect(() => {
     if (!mountRef.current) return;
 
-    // Scene setup
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x2c3e50);
+    const currentMount = mountRef.current;
     
+    // Scene setup with black background
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+    
+    // Add background effects
+    const backgroundPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 30),
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelMatrix * viewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          varying vec2 vUv;
+          
+          void main() {
+            vec3 color1 = vec3(sin(uTime * 0.3) * 0.5 + 0.5, 
+                              sin(uTime * 0.4) * 0.5 + 0.5,
+                              sin(uTime * 0.5) * 0.5 + 0.5);
+            vec3 color2 = vec3(sin(uTime * 0.6) * 0.5 + 0.5,
+                              sin(uTime * 0.7) * 0.5 + 0.5,
+                              sin(uTime * 0.8) * 0.5 + 0.5);
+            
+            vec3 finalColor = mix(color1, color2, vUv.x);
+            gl_FragColor = vec4(finalColor * 0.3, 1.0);  // Dimmed for better contrast
+          }
+        `
+      })
+    );
+    backgroundPlane.position.z = -5;
+    scene.add(backgroundPlane);
+
+    // Add cave-like overlay
+    const caveOverlay = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 30),
+      new THREE.ShaderMaterial({
+        transparent: true,
+        uniforms: {
+          uTime: { value: 0 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelMatrix * viewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          varying vec2 vUv;
+          
+          float random(vec2 st) {
+            return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+          }
+          
+          void main() {
+            float noise = random(vUv + uTime * 0.1);
+            float line = step(0.97, noise);
+            gl_FragColor = vec4(vec3(1.0), line * 0.1);  // White lines with 0.1 opacity
+          }
+        `
+      })
+    );
+    caveOverlay.position.z = -4;
+    scene.add(caveOverlay);
+
     // Camera and renderer setup
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 5, 10);
     
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    mountRef.current.appendChild(renderer.domElement);
+    currentMount.appendChild(renderer.domElement);
 
     // Calculate game boundaries
     const getViewBounds = () => {
@@ -256,12 +373,59 @@ const SpyGame: React.FC = () => {
     const ball = new Ball(scene);
     let activeSpells: Spell[] = [];
 
-    // Create platforms
-    const platforms = [
-      new Platform(scene, -5, 2),
-      new Platform(scene, 0, 3),
-      new Platform(scene, 5, 2),
-    ];
+    // Create random symmetric platforms
+    const generatePlatforms = () => {
+      const platforms: Platform[] = [];
+      
+      // Random number of platforms (1, 3, 5, or 7)
+      const platformCount = [1, 3, 5, 7][Math.floor(Math.random() * 4)];
+      
+      // Always create center platform
+      platforms.push(new Platform(scene, 0, 2 + Math.random() * 2));
+
+      if (platformCount > 1) {
+        // Create symmetric pairs
+        const pairCount = (platformCount - 1) / 2;
+        for (let i = 0; i < pairCount; i++) {
+          const x = 3 + Math.random() * 4; // Random x between 3 and 7
+          const y = 1 + Math.random() * 3; // Random y between 1 and 4
+          
+          // Create symmetric pair
+          platforms.push(new Platform(scene, x, y));
+          platforms.push(new Platform(scene, -x, y));
+        }
+      }
+
+      return platforms;
+    };
+
+    const platforms = generatePlatforms();
+
+    // Create half walls behind players
+    const createHalfWall = (x: number) => {
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 4, 1),
+        new THREE.MeshPhongMaterial({ color: 0x808080 })
+      );
+      wall.position.set(x, 2, 0);
+      scene.add(wall);
+      
+      // Add collision bounds for the wall
+      return {
+        mesh: wall,
+        top: 4,
+        bottom: 0,
+        left: x - 0.25,
+        right: x + 0.25
+      };
+    };
+
+    const leftWall = createHalfWall(-9.5);
+    const rightWall = createHalfWall(9.5);
+    
+    // Add walls to platforms array for collision detection
+    platforms.push(leftWall);
+    platforms.push(rightWall);
 
     // Create portals
     const createPortal = (x: number) => {
@@ -334,6 +498,10 @@ const SpyGame: React.FC = () => {
     // Animation loop
     const animate = () => {
       requestAnimationFrame(animate);
+      
+      const time = performance.now() * 0.001;
+      backgroundPlane.material.uniforms.uTime.value = time;
+      caveOverlay.material.uniforms.uTime.value = time;
 
       if (keys.player1.left) player1.moveLeft();
       if (keys.player1.right) player1.moveRight();
@@ -353,7 +521,7 @@ const SpyGame: React.FC = () => {
 
       player1.update(platforms);
       player2.update(platforms);
-      ball.update(gameHeight);
+      ball.update(gameHeight, platforms);
 
       activeSpells = activeSpells.filter(spell => !spell.update(scene));
 
@@ -406,7 +574,7 @@ const SpyGame: React.FC = () => {
     animate();
 
     return () => {
-      mountRef.current?.removeChild(renderer.domElement);
+      currentMount?.removeChild(renderer.domElement);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
