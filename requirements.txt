@@ -1,0 +1,47 @@
+Here's a concise project overview prompt:
+
+"I'm building a multiplayer platform-physics game inspired by Pong and Spy vs Spy, using Three.js. It's a side-scrolling 1v1 game where players are red and blue circles that can jump between randomly generated platforms and cast short-range spells. The map loops horizontally (go right, appear on left), and there's an oval-shaped goal/portal on each side. A white ball bounces around with no gravity, and players try to score it in the opponent's goal either by touching it or using their spell blasts. The game has a neon color-shifting background with a black cave overlay. I need help setting this up properly and implementing the core mechanics and visual effects. The controls are WASD+E for player 1 and IJKL+O for player 2. Can you help me create and structure this game?"
+
+
+
+Here's what we need to continue fixing and implementing for the game:
+
+1. Fix animation loop - it's currently truncated and missing player movement code. Need to complete all player and ball updates.
+
+2. Bug fixes needed:
+   - Missing cleanup for THREE.js scene and objects
+   - Missing window resize handler
+   - Controls need to be fixed (movement directions are mixed up)
+   - Missing portal collision side checks
+
+3. Missing features to implement:
+   - Ball-platform collisions
+   - Ball speed limits
+   - Visual feedback for spell casting
+   - Screen shake on explosions
+   - Goal scoring effects
+   - Player spawn points after scoring
+
+4. Code structure improvements:
+   - Need to export all class definitions
+   - Need proper React hooks for managing game state
+   - Need proper TypeScript types
+   - Need to handle component unmounting cleanly
+
+5. Performance optimizations:
+   - Object pooling for spells and explosions
+   - Efficient collision checking
+   - Proper render loop management
+
+6. Visual improvements:
+   - Better shader for background color transitions
+   - More dynamic cave generation
+   - Platform appearance and effects
+   - Particle effects for spells and goals
+
+7. Game balance:
+   - Tune ball physics values
+   - Adjust spell radius and lifetime
+   - Platform placement rules
+   - Jump and movement speeds
+
