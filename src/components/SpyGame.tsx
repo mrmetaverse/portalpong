@@ -2,197 +2,110 @@ import React from 'react';
 import * as THREE from 'three';
 
 interface GameState {
-  player1Score: number;
-  player2Score: number;
-  gameStatus: 'playing' | 'paused' | 'ended';
+  player1Health: number;
+  player2Health: number;
+  player1Clues: number;
+  player2Clues: number;
+  gameStatus: 'playing' | 'player1_won' | 'player2_won';
 }
 
-class Platform {
+interface Bomb {
+  mesh: THREE.Mesh;
+  position: THREE.Vector3;
+  timeLeft: number;
+  owner: 'player1' | 'player2';
+}
+
+interface Platform {
   mesh: THREE.Mesh;
   top: number;
   bottom: number;
   left: number;
   right: number;
+}
 
-  constructor(scene: THREE.Scene, x: number, y: number, width = 2) {
+interface ClueItem {
+  mesh: THREE.Mesh;
+  position: THREE.Vector3;
+  collected: boolean;
+}
+
+interface Room {
+  id: number;
+  x: number;
+  y: number;
+  platforms: Platform[];
+  portals: Portal[];
+  clues: ClueItem[];
+  discovered: boolean;
+  connections: number[];
+  leftDoor?: Portal;
+  rightDoor?: Portal;
+}
+
+interface Portal {
+  mesh: THREE.Mesh;
+  position: THREE.Vector3;
+  targetRoomId: number;
+  direction: 'left' | 'right';
+}
+
+const generatePlatforms = (scene: THREE.Scene) => {
+  const platforms: Platform[] = [];
+  
+  // Create floor platform
+  const floor = new THREE.Mesh(
+    new THREE.BoxGeometry(20, 0.5, 5),
+    new THREE.MeshPhongMaterial({ color: 0x808080 })
+  );
+  floor.position.set(0, -1, 0);
+  scene.add(floor);
+  
+  // Add floor to platforms with collision bounds
+  platforms.push({
+    mesh: floor,
+    top: -0.75,     // Position + half height
+    bottom: -1.25,  // Position - half height
+    left: -10,      // Position - half width
+    right: 10       // Position + half width
+  });
+
+  // Create random platforms (rest of the code stays the same)
+  const platformCount = 3 + Math.floor(Math.random() * 5);
+  
+  for (let i = 0; i < platformCount; i++) {
+    const width = 2 + Math.random() * 3;
+    const x = -8 + Math.random() * 16; // Random x between -8 and 8
+    const y = 1 + Math.random() * 4;   // Random y between 1 and 5
+    
     const geometry = new THREE.BoxGeometry(width, 0.2, 1);
     const material = new THREE.MeshPhongMaterial({ color: 0x95a5a6 });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.position.set(x, y, 0);
-    scene.add(this.mesh);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, 0);
+    scene.add(mesh);
 
-    this.top = y + 0.1;
-    this.bottom = y - 0.1;
-    this.left = x - width/2;
-    this.right = x + width/2;
-  }
-}
-
-class Spell {
-  mesh: THREE.Mesh;
-  velocity: THREE.Vector3;
-  lifetime: number;
-  exploded: boolean;
-  explosionRadius: number;
-  explosionMesh?: THREE.Mesh;
-
-  constructor(scene: THREE.Scene, position: THREE.Vector3, direction: THREE.Vector3) {
-    const geometry = new THREE.SphereGeometry(0.1);
-    const material = new THREE.MeshBasicMaterial({ 
-      color: 0xffff00,
-      transparent: true,
-      opacity: 0.8
+    platforms.push({
+      mesh,
+      top: y + 0.1,
+      bottom: y - 0.1,
+      left: x - width/2,
+      right: x + width/2
     });
-    this.mesh = new THREE.Mesh(geometry, material);
-    
-    const spawnOffset = new THREE.Vector3(
-      direction.x * 0.6,
-      0.6,
-      0
-    );
-    this.mesh.position.copy(position).add(spawnOffset);
-    
-    this.velocity = new THREE.Vector3(
-      direction.x * 0.2,
-      0.2,
-      0
-    );
-    
-    this.lifetime = 15;
-    this.exploded = false;
-    this.explosionRadius = 0.5;
-    scene.add(this.mesh);
   }
 
-  update(scene: THREE.Scene) {
-    if (this.exploded) return true;
-    
-    this.lifetime--;
-    if (this.lifetime <= 0) {
-      this.explode(scene);
-      return true;
-    }
-    
-    this.mesh.position.add(this.velocity);
-    return false;
-  }
-
-  explode(scene: THREE.Scene) {
-    this.exploded = true;
-    const explosionGeo = new THREE.SphereGeometry(this.explosionRadius);
-    const explosionMat = new THREE.MeshBasicMaterial({
-      color: 0xff8800,
-      transparent: true,
-      opacity: 0.5
-    });
-    this.explosionMesh = new THREE.Mesh(explosionGeo, explosionMat);
-    this.explosionMesh.position.copy(this.mesh.position);
-    scene.add(this.explosionMesh);
-    
-    setTimeout(() => {
-      if (this.explosionMesh) {
-        scene.remove(this.explosionMesh);
-        scene.remove(this.mesh);
-      }
-    }, 100);
-  }
-}
-
-class Ball {
-  mesh: THREE.Mesh;
-  velocity: THREE.Vector3;
-
-  constructor(scene: THREE.Scene) {
-    const geometry = new THREE.SphereGeometry(0.3);
-    const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.velocity = new THREE.Vector3(
-      (Math.random() - 0.5) * 0.2,
-      (Math.random() - 0.5) * 0.2,
-      0
-    );
-    this.mesh.position.set(0, 2, 0);
-    scene.add(this.mesh);
-  }
-
-  update(gameHeight: number, platforms: Platform[]) {
-    const nextPosition = this.mesh.position.clone().add(this.velocity);
-
-    // Check platform collisions
-    platforms.forEach(platform => {
-      // Ball's current bounds
-      const ballBottom = this.mesh.position.y - 0.3;
-      const ballTop = this.mesh.position.y + 0.3;
-      const ballLeft = this.mesh.position.x - 0.3;
-      const ballRight = this.mesh.position.x + 0.3;
-
-      // Ball's next bounds
-      const nextBallBottom = nextPosition.y - 0.3;
-      const nextBallTop = nextPosition.y + 0.3;
-      const nextBallLeft = nextPosition.x - 0.3;
-      const nextBallRight = nextPosition.x + 0.3;
-
-      // Collision checks
-      if (nextBallRight >= platform.left && nextBallLeft <= platform.right) {
-        // Vertical collision
-        if (nextBallBottom <= platform.top && ballBottom > platform.top) {
-          // Hitting platform from above
-          nextPosition.y = platform.top + 0.3;
-          this.velocity.y *= -1;
-        } else if (nextBallTop >= platform.bottom && ballTop < platform.bottom) {
-          // Hitting platform from below
-          nextPosition.y = platform.bottom - 0.3;
-          this.velocity.y *= -1;
-        }
-      }
-
-      if (nextBallTop >= platform.bottom && nextBallBottom <= platform.top) {
-        // Horizontal collision
-        if (nextBallRight >= platform.left && ballRight < platform.left) {
-          // Hitting platform from left
-          nextPosition.x = platform.left - 0.3;
-          this.velocity.x *= -1;
-        } else if (nextBallLeft <= platform.right && ballLeft > platform.right) {
-          // Hitting platform from right
-          nextPosition.x = platform.right + 0.3;
-          this.velocity.x *= -1;
-        }
-      }
-    });
-
-    // Update position after collision checks
-    this.mesh.position.copy(nextPosition);
-    
-    // Existing wrapping and bounds checks
-    if (this.mesh.position.x > 10) this.mesh.position.x = -10;
-    if (this.mesh.position.x < -10) this.mesh.position.x = 10;
-
-    if (this.mesh.position.y > gameHeight || this.mesh.position.y < 0) {
-      this.velocity.y *= -1;
-    }
-  }
-
-  bounce(normal: THREE.Vector3, speed = 1) {
-    const dot = this.velocity.dot(normal);
-    this.velocity.sub(normal.multiplyScalar(2 * dot));
-    this.velocity.multiplyScalar(speed);
-  }
-
-  reset() {
-    this.mesh.position.set(0, 2, 0);
-    this.velocity.set(
-      (Math.random() - 0.5) * 0.2,
-      (Math.random() - 0.5) * 0.2,
-      0
-    );
-  }
-}
+  return platforms;
+};
 
 class Player {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
   onGround: boolean;
   direction: THREE.Vector3;
+  health: number;
+  clues: number;
+  isAttacking: boolean;
+  attackCooldown: number;
+  bombCooldown: number;
   pressingDown: boolean;
 
   constructor(scene: THREE.Scene, color: number, startX: number) {
@@ -203,6 +116,11 @@ class Player {
     this.velocity = new THREE.Vector3(0, 0, 0);
     this.onGround = true;
     this.direction = new THREE.Vector3(1, 0, 0);
+    this.health = 10;
+    this.clues = 0;
+    this.isAttacking = false;
+    this.attackCooldown = 0;
+    this.bombCooldown = 0;
     this.pressingDown = false;
     scene.add(this.mesh);
   }
@@ -215,7 +133,15 @@ class Player {
     const nextPosition = this.mesh.position.clone().add(this.velocity);
     const playerRadius = 0.5;
 
-    this.onGround = false;
+    // Floor collision first
+    if (nextPosition.y - playerRadius < 0) {
+      nextPosition.y = playerRadius; // Keep player above ground
+      this.velocity.y = 0;
+      this.onGround = true;
+    }
+
+    // Then check other platforms
+    this.onGround = this.onGround || false; // Keep ground state if we're on the floor
     platforms.forEach(platform => {
       const playerLeft = nextPosition.x - playerRadius;
       const playerRight = nextPosition.x + playerRadius;
@@ -250,17 +176,40 @@ class Player {
     });
 
     this.mesh.position.copy(nextPosition);
+    
+    // Update cooldowns
+    if (this.attackCooldown > 0) this.attackCooldown--;
+    if (this.bombCooldown > 0) this.bombCooldown--;
+    
+    // Reset attack state
+    this.isAttacking = false;
+  }
 
-    if (this.mesh.position.y < 0) {
-      this.mesh.position.y = 0;
-      this.velocity.y = 0;
-      this.onGround = true;
+  punch() {
+    if (this.attackCooldown === 0) {
+      this.isAttacking = true;
+      this.attackCooldown = 30; // 0.5 seconds cooldown
     }
+  }
 
-    if (this.mesh.position.x > 10) this.mesh.position.x = -10;
-    if (this.mesh.position.x < -10) this.mesh.position.x = 10;
-
-    this.velocity.x *= 0.9;
+  plantBomb(scene: THREE.Scene, bombs: Bomb[]) {
+    if (this.bombCooldown === 0) {
+      const bombGeometry = new THREE.SphereGeometry(0.3);
+      const bombMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+      const bombMesh = new THREE.Mesh(bombGeometry, bombMaterial);
+      bombMesh.position.copy(this.mesh.position);
+      
+      const bomb: Bomb = {
+        mesh: bombMesh,
+        position: this.mesh.position.clone(),
+        timeLeft: 300, // 5 seconds at 60fps
+        owner: this.mesh.position.x < 0 ? 'player1' : 'player2'
+      };
+      
+      scene.add(bombMesh);
+      bombs.push(bomb);
+      this.bombCooldown = 180; // 3 seconds cooldown
+    }
   }
 
   jump() {
@@ -279,234 +228,122 @@ class Player {
     this.velocity.x = 0.15;
     this.direction.x = 1;
   }
-
-  castSpell(scene: THREE.Scene) {
-    return new Spell(scene, this.mesh.position, this.direction);
-  }
 }
 
-// Add a new class for moving walls
-class MovingWall implements Platform {
-  mesh: THREE.Mesh;
-  baseY: number;
-  amplitude: number;
-  frequency: number;
-  top: number = 0;
-  bottom: number = 0;
-  left: number;
-  right: number;
+const findOppositeRooms = (rooms: Room[]) => {
+  // Find rooms in opposite corners
+  const leftmostRooms = rooms.filter(r => r.x === 0);
+  const rightmostRooms = rooms.filter(r => r.x === 2); // For 3x4 grid
 
-  constructor(scene: THREE.Scene, x: number, baseY: number = 2) {
-    const geometry = new THREE.BoxGeometry(0.5, 4, 1);
-    const material = new THREE.MeshPhongMaterial({ color: 0x808080 });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.position.set(x, baseY, 0);
-    scene.add(this.mesh);
+  const topLeft = leftmostRooms.find(r => r.y === 0);
+  const bottomRight = rightmostRooms.find(r => r.y === 3);
 
-    this.baseY = baseY;
-    this.amplitude = 2;
-    this.frequency = 0.5;
+  return {
+    player1Spawn: topLeft?.id ?? 0,
+    player2Spawn: bottomRight?.id ?? rooms.length - 1
+  };
+};
 
-    // Set initial bounds
-    this.left = x - 0.25;
-    this.right = x + 0.25;
+const createRoom = (
+  roomId: number, 
+  allRooms: Room[], 
+  gameScene: THREE.Scene
+) => {
+  const room = allRooms[roomId];
+  
+  // Clear existing room
+  room.platforms.forEach((p: Platform) => gameScene.remove(p.mesh));
+  room.portals.forEach((p: Portal) => gameScene.remove(p.mesh));
+  room.clues?.forEach((c: ClueItem) => gameScene.remove(c.mesh));
+  
+  // Generate platforms
+  const newPlatforms = generatePlatforms(gameScene);
+  room.platforms = newPlatforms;
+
+  // Create doors on both sides
+  const createDoor = (isLeft: boolean): Portal => {
+    const x = isLeft ? -9 : 9;
+    const portalGeometry = new THREE.BoxGeometry(0.5, 2, 1);
+    const portalMaterial = new THREE.MeshBasicMaterial({ color: 0x8B4513 });
+    const portalMesh = new THREE.Mesh(portalGeometry, portalMaterial);
+    portalMesh.position.set(x, 1, 0);
+    gameScene.add(portalMesh);
     
-    // Initial position update
-    this.updateBounds(0);
-  }
+    const direction = isLeft ? 'left' : 'right';
+    
+    return {
+      mesh: portalMesh,
+      position: new THREE.Vector3(x, 1, 0),
+      targetRoomId: -1,
+      direction
+    };
+  };
 
-  updateBounds(time: number) {
-    const yOffset = Math.sin(time * this.frequency) * this.amplitude;
-    this.mesh.position.y = this.baseY + yOffset;
-    this.top = this.mesh.position.y + 2;
-    this.bottom = this.mesh.position.y - 2;
-  }
-}
+  room.leftDoor = createDoor(true);
+  room.rightDoor = createDoor(false);
+
+  // Connect doors to adjacent rooms
+  allRooms.forEach((otherRoom: Room) => {
+    if (otherRoom.id !== room.id) {
+      if (otherRoom.x === room.x - 1 && otherRoom.y === room.y) {
+        room.leftDoor!.targetRoomId = otherRoom.id;
+      }
+      if (otherRoom.x === room.x + 1 && otherRoom.y === room.y) {
+        room.rightDoor!.targetRoomId = otherRoom.id;
+      }
+    }
+  });
+
+  return room;
+};
 
 const SpyGame: React.FC = () => {
   const mountRef = React.useRef<HTMLDivElement>(null);
   const [gameState, setGameState] = React.useState<GameState>({
-    player1Score: 0,
-    player2Score: 0,
+    player1Health: 10,
+    player2Health: 10,
+    player1Clues: 0,
+    player2Clues: 0,
     gameStatus: 'playing'
   });
+  const [currentRoomId, setCurrentRoomId] = React.useState(0);
+  const [rooms, setRooms] = React.useState<Room[]>([]);
 
   React.useEffect(() => {
     if (!mountRef.current) return;
-
     const currentMount = mountRef.current;
-    
-    // Scene setup with black background
+
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
-    
-    // Add background effects
-    const backgroundPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 30),
-      new THREE.ShaderMaterial({
-        uniforms: {
-          uTime: { value: 0 },
-        },
-        vertexShader: `
-          varying vec2 vUv;
-          void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelMatrix * viewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform float uTime;
-          varying vec2 vUv;
-          
-          void main() {
-            vec3 color1 = vec3(sin(uTime * 0.3) * 0.5 + 0.5, 
-                              sin(uTime * 0.4) * 0.5 + 0.5,
-                              sin(uTime * 0.5) * 0.5 + 0.5);
-            vec3 color2 = vec3(sin(uTime * 0.6) * 0.5 + 0.5,
-                              sin(uTime * 0.7) * 0.5 + 0.5,
-                              sin(uTime * 0.8) * 0.5 + 0.5);
-            
-            vec3 finalColor = mix(color1, color2, vUv.x);
-            gl_FragColor = vec4(finalColor * 0.3, 1.0);  // Dimmed for better contrast
-          }
-        `
-      })
-    );
-    backgroundPlane.position.z = -5;
-    scene.add(backgroundPlane);
 
-    // Add cave-like overlay
-    const caveOverlay = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 30),
-      new THREE.ShaderMaterial({
-        transparent: true,
-        uniforms: {
-          uTime: { value: 0 }
-        },
-        vertexShader: `
-          varying vec2 vUv;
-          void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelMatrix * viewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform float uTime;
-          varying vec2 vUv;
-          
-          float random(vec2 st) {
-            return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
-          }
-          
-          void main() {
-            float noise = random(vUv + uTime * 0.1);
-            float line = step(0.97, noise);
-            gl_FragColor = vec4(vec3(1.0), line * 0.1);  // White lines with 0.1 opacity
-          }
-        `
-      })
-    );
-    caveOverlay.position.z = -4;
-    scene.add(caveOverlay);
-
-    // Camera and renderer setup
+    // Camera setup
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 5, 10);
+    camera.lookAt(0, 0, 0);
     
+    // Renderer setup
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     currentMount.appendChild(renderer.domElement);
 
-    // Calculate game boundaries
-    const getViewBounds = () => {
-      const vFOV = THREE.MathUtils.degToRad(camera.fov);
-      const height = 2 * Math.tan(vFOV / 2) * Math.abs(camera.position.z);
-      const width = height * camera.aspect;
-      return { width, height };
-    };
-
-    const viewBounds = getViewBounds();
-    const gameHeight = viewBounds.height - 1;
-
-    // Create game objects
     const player1 = new Player(scene, 0xff0000, -5);
     const player2 = new Player(scene, 0x0000ff, 5);
-    const ball = new Ball(scene);
-    let activeSpells: Spell[] = [];
+    let bombs: Bomb[] = [];
 
-    // Create random symmetric platforms
-    const generatePlatforms = () => {
-      const platforms: Platform[] = [];
-      
-      // Random number of platforms (1, 3, 5, or 7)
-      const platformCount = [1, 3, 5, 7][Math.floor(Math.random() * 4)];
-      
-      // Always create center platform
-      platforms.push(new Platform(scene, 0, 2 + Math.random() * 2));
-
-      if (platformCount > 1) {
-        // Create symmetric pairs
-        const pairCount = (platformCount - 1) / 2;
-        for (let i = 0; i < pairCount; i++) {
-          const x = 3 + Math.random() * 4; // Random x between 3 and 7
-          const y = 1 + Math.random() * 3; // Random y between 1 and 4
-          
-          // Create symmetric pair
-          platforms.push(new Platform(scene, x, y));
-          platforms.push(new Platform(scene, -x, y));
-        }
-      }
-
-      return platforms;
+    // Create clues
+    const createClue = (x: number, y: number) => {
+      const clueGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+      const clueMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      const clueMesh = new THREE.Mesh(clueGeometry, clueMaterial);
+      clueMesh.position.set(x, y, 0);
+      scene.add(clueMesh);
+      return clueMesh;
     };
-
-    const platforms = generatePlatforms();
-
-    // Create half walls behind players
-    const leftWall = new MovingWall(scene, -9.5);
-    const rightWall = new MovingWall(scene, 9.5);
-    
-    // Add walls to platforms array for collision detection
-    platforms.push(leftWall);
-    platforms.push(rightWall);
-
-    // Create portals
-    const createPortal = (x: number) => {
-      const curve = new THREE.EllipseCurve(
-        x, 2.5,
-        0.5, 1.2,
-        0, 2 * Math.PI,
-        true
-      );
-      const points = curve.getPoints(50);
-      const portalGeometry = new THREE.BufferGeometry().setFromPoints(points);
-      const portalMaterial = new THREE.LineBasicMaterial({ color: x < 0 ? 0xff0000 : 0x0000ff });
-      const portal = new THREE.Line(portalGeometry, portalMaterial);
-      scene.add(portal);
-      return portal;
-    };
-
-    createPortal(-9);
-    createPortal(9);
-
-    // Create floor
-    const floor = new THREE.Mesh(
-      new THREE.BoxGeometry(20, 0.5, 5),
-      new THREE.MeshPhongMaterial({ color: 0x808080 })
-    );
-    floor.position.set(0, -1, 0);
-    scene.add(floor);
-
-    // Add lighting
-    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    directionalLight.position.set(0, 10, 0);
-    scene.add(directionalLight);
 
     // Controls
     const keys = {
-      player1: { left: false, right: false, jump: false, spell: false },
-      player2: { left: false, right: false, jump: false, spell: false }
+      player1: { left: false, right: false, jump: false, attack: false, bomb: false },
+      player2: { left: false, right: false, jump: false, attack: false, bomb: false }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -514,13 +351,13 @@ const SpyGame: React.FC = () => {
         case 'a': keys.player1.left = true; break;
         case 'd': keys.player1.right = true; break;
         case 'w': keys.player1.jump = true; break;
-        case 's': player1.pressingDown = true; break;
-        case 'e': keys.player1.spell = true; break;
+        case 'e': keys.player1.attack = true; break;
+        case 'b': keys.player1.bomb = true; break;
         case 'i': keys.player2.left = true; break;
         case 'l': keys.player2.right = true; break;
         case 'j': keys.player2.jump = true; break;
-        case 'k': player2.pressingDown = true; break;
-        case 'o': keys.player2.spell = true; break;
+        case 'o': keys.player2.attack = true; break;
+        case 'n': keys.player2.bomb = true; break;
       }
     };
 
@@ -529,128 +366,233 @@ const SpyGame: React.FC = () => {
         case 'a': keys.player1.left = false; break;
         case 'd': keys.player1.right = false; break;
         case 'w': keys.player1.jump = false; break;
-        case 's': player1.pressingDown = false; break;
-        case 'e': keys.player1.spell = false; break;
+        case 'e': keys.player1.attack = false; break;
+        case 'b': keys.player1.bomb = false; break;
         case 'i': keys.player2.left = false; break;
         case 'l': keys.player2.right = false; break;
         case 'j': keys.player2.jump = false; break;
-        case 'k': player2.pressingDown = false; break;
-        case 'o': keys.player2.spell = false; break;
+        case 'o': keys.player2.attack = false; break;
+        case 'n': keys.player2.bomb = false; break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 
+    // Generate random room layout
+    const generateRooms = () => {
+      const newRooms: Room[] = [];
+      const totalRooms = 10;
+      
+      // Create rooms in a grid
+      for (let i = 0; i < totalRooms; i++) {
+        const room: Room = {
+          id: i,
+          x: i % 3,  // 3x4 grid
+          y: Math.floor(i / 3),
+          platforms: [],
+          portals: [],
+          clues: [],
+          discovered: i === 0,  // Start room is discovered
+          connections: []
+        };
+        newRooms.push(room);
+      }
+
+      // Randomly connect rooms
+      for (let i = 0; i < totalRooms; i++) {
+        const room = newRooms[i];
+        const possibleConnections = newRooms.filter(r => 
+          r.id !== room.id && 
+          Math.abs(r.x - room.x) + Math.abs(r.y - room.y) === 1 &&
+          !room.connections.includes(r.id)
+        );
+
+        if (possibleConnections.length > 0) {
+          const target = possibleConnections[Math.floor(Math.random() * possibleConnections.length)];
+          room.connections.push(target.id);
+          target.connections.push(room.id);
+        }
+      }
+
+      return newRooms;
+    };
+
+    const rooms = generateRooms();
+    const { player1Spawn, player2Spawn } = findOppositeRooms(rooms);
+
+    // Create all rooms first
+    rooms.forEach(room => createRoom(room.id, rooms, scene));
+
+    // Spawn players in their respective rooms
+    player1.mesh.position.set(-5, 1, 0); // Start on left side of spawn room
+    player2.mesh.position.set(5, 1, 0);  // Start on right side of spawn room
+    
+    setCurrentRoomId(player1Spawn); // Start viewing player 1's room
+
+    // Modify the checkPortals function to use doors
+    const checkPortals = () => {
+      const currentRoom = rooms[currentRoomId];
+      
+      [currentRoom.leftDoor, currentRoom.rightDoor].forEach(door => {
+        if (!door || door.targetRoomId === -1) return;
+
+        [player1, player2].forEach(player => {
+          const distance = player.mesh.position.distanceTo(door.position);
+          if (distance < 1) {
+            // Transport player to new room
+            const targetRoom = rooms[door.targetRoomId];
+            player.mesh.position.x = door.direction === 'right' ? -8 : 8;
+            targetRoom.discovered = true;
+            
+            // If this is the viewed player, switch rooms
+            if (player === player1) { // Assuming we follow player 1
+              setCurrentRoomId(door.targetRoomId);
+            }
+          }
+        });
+      });
+    };
+
+    // Add more lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    directionalLight.position.set(0, 10, 5);
+    scene.add(directionalLight);
+
     // Animation loop
     const animate = () => {
       requestAnimationFrame(animate);
-      
-      const time = performance.now() * 0.001;
-      backgroundPlane.material.uniforms.uTime.value = time;
-      caveOverlay.material.uniforms.uTime.value = time;
 
-      // Update wall positions
-      leftWall.updateBounds(time);
-      rightWall.updateBounds(time);
-      // Phase shift the right wall so they move opposite each other
-      rightWall.updateBounds(time + Math.PI);
-
+      // Update players based on keys
       if (keys.player1.left) player1.moveLeft();
       if (keys.player1.right) player1.moveRight();
       if (keys.player1.jump) player1.jump();
-      if (keys.player1.spell) {
-        activeSpells.push(player1.castSpell(scene));
-        keys.player1.spell = false;
-      }
+      if (keys.player1.attack) player1.punch();
+      if (keys.player1.bomb) player1.plantBomb(scene, bombs);
 
       if (keys.player2.left) player2.moveLeft();
       if (keys.player2.right) player2.moveRight();
       if (keys.player2.jump) player2.jump();
-      if (keys.player2.spell) {
-        activeSpells.push(player2.castSpell(scene));
-        keys.player2.spell = false;
-      }
+      if (keys.player2.attack) player2.punch();
+      if (keys.player2.bomb) player2.plantBomb(scene, bombs);
 
-      player1.update(platforms);
-      player2.update(platforms);
-      ball.update(gameHeight, platforms);
+      // Update physics
+      player1.update(rooms[currentRoomId].platforms);
+      player2.update(rooms[currentRoomId].platforms);
 
-      activeSpells = activeSpells.filter(spell => !spell.update(scene));
-
-      // Check collisions
-      [player1, player2].forEach(player => {
-        const distance = ball.mesh.position.distanceTo(player.mesh.position);
-        if (distance < 0.8) {
-          const normal = new THREE.Vector3()
-            .subVectors(ball.mesh.position, player.mesh.position)
-            .normalize();
-          ball.bounce(normal, 1.1);
-        }
-      });
-
-      activeSpells.forEach(spell => {
-        if (spell.exploded && spell.explosionMesh) {
-          const distance = ball.mesh.position.distanceTo(spell.explosionMesh.position);
-          if (distance < spell.explosionRadius) {
-            const normal = new THREE.Vector3()
-              .subVectors(ball.mesh.position, spell.explosionMesh.position)
-              .normalize();
-            
-            // Calculate how centered the hit was (1 = perfect center, 0 = edge)
-            const centeredness = 1 - (distance / spell.explosionRadius);
-            
-            // For perfect hits, override the normal to point directly at enemy goal
-            if (centeredness > 0.9) {
-              // Determine which player's spell it was based on x position
-              const isPlayer1Spell = spell.mesh.position.x < 0;
-              normal.set(isPlayer1Spell ? 1 : -1, 0, 0);
-              ball.bounce(normal, 2.0); // Extra speed for perfect hits
-            } else {
-              ball.bounce(normal, 1.2);
-            }
+      // Update bombs
+      bombs = bombs.filter(bomb => {
+        bomb.timeLeft--;
+        if (bomb.timeLeft <= 0) {
+          // Explosion
+          const distance1 = bomb.position.distanceTo(player1.mesh.position);
+          const distance2 = bomb.position.distanceTo(player2.mesh.position);
+          
+          if (distance1 < 2 && bomb.owner !== 'player1') {
+            setGameState(prev => ({
+              ...prev,
+              player1Health: Math.max(0, prev.player1Health - 9)
+            }));
           }
+          
+          if (distance2 < 2 && bomb.owner !== 'player2') {
+            setGameState(prev => ({
+              ...prev,
+              player2Health: Math.max(0, prev.player2Health - 9)
+            }));
+          }
+          
+          scene.remove(bomb.mesh);
+          return false;
+        }
+        return true;
+      });
+
+      // Check combat
+      const playerDistance = player1.mesh.position.distanceTo(player2.mesh.position);
+      if (playerDistance < 1.2) {
+        if (player1.isAttacking) {
+          setGameState(prev => ({
+            ...prev,
+            player2Health: Math.max(0, prev.player2Health - 2)
+          }));
+        }
+        if (player2.isAttacking) {
+          setGameState(prev => ({
+            ...prev,
+            player1Health: Math.max(0, prev.player1Health - 2)
+          }));
+        }
+      }
+
+      // Check clue collection
+      const currentRoom = rooms[currentRoomId];
+      currentRoom.clues?.forEach(clue => {
+        if (!clue.collected) {
+          [player1, player2].forEach(player => {
+            const distance = player.mesh.position.distanceTo(clue.position);
+            if (distance < 1) {
+              clue.collected = true;
+              scene.remove(clue.mesh);
+              setGameState(prev => ({
+                ...prev,
+                [player === player1 ? 'player1Clues' : 'player2Clues']: 
+                  prev[player === player1 ? 'player1Clues' : 'player2Clues'] + 1
+              }));
+            }
+          });
         }
       });
 
-      // Goal detection
-      const ballX = ball.mesh.position.x;
-      const ballY = ball.mesh.position.y;
-      
-      if (ballX < -8.5 && ballY > 1.3 && ballY < 3.7) {
-        setGameState(prev => ({
-          ...prev,
-          player2Score: prev.player2Score + 1
-        }));
-        ball.reset();
-      }
-      
-      if (ballX > 8.5 && ballY > 1.3 && ballY < 3.7) {
-        setGameState(prev => ({
-          ...prev,
-          player1Score: prev.player1Score + 1
-        }));
-        ball.reset();
-      }
-
+      checkPortals();
       renderer.render(scene, camera);
     };
 
     animate();
 
+    // Add resize handler
+    const handleResize = () => {
+      if (!mountRef.current) return;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+    };
+
+    window.addEventListener('resize', handleResize);
+
     return () => {
       currentMount?.removeChild(renderer.domElement);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('resize', handleResize);
     };
-  }, []);
+  }, [currentRoomId]);
 
   return (
     <div className="w-full h-screen">
       <div ref={mountRef} className="w-full h-full" />
       <div className="absolute top-4 left-4 bg-black/50 text-white p-4 rounded">
-        <div>Red Score: {gameState.player1Score}</div>
-        <div>Blue Score: {gameState.player2Score}</div>
+        <div>Red Health: {gameState.player1Health} Clues: {gameState.player1Clues}</div>
+        <div>Blue Health: {gameState.player2Health} Clues: {gameState.player2Clues}</div>
+      </div>
+      {/* Mini-map */}
+      <div className="absolute bottom-4 right-4 bg-black/50 p-2 rounded">
+        <div className="grid grid-cols-3 gap-1">
+          {rooms.map(room => (
+            <div 
+              key={room.id}
+              className={`w-4 h-4 border ${
+                room.discovered ? 'bg-gray-500' : 'bg-gray-900'
+              } ${currentRoomId === room.id ? 'border-yellow-500' : 'border-gray-700'}`}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

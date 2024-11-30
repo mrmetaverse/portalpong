@@ -1,11 +1,11 @@
 import React from 'react';
-import SpyGame from './components/SpyGame';
+import GameLoader from './components/GameLoader';
 import './App.css';
 
 function App() {
   return (
-    <div className="App">
-      <SpyGame />
+    <div className="w-full h-screen bg-black">
+      <GameLoader />
     </div>
   );
 }
