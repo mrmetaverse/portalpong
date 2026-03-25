@@ -307,7 +307,7 @@ const SpyGame: React.FC = () => {
     gameStatus: 'playing'
   });
   const [currentRoomId, setCurrentRoomId] = React.useState(0);
-  const [rooms, setRooms] = React.useState<Room[]>([]);
+  const [rooms] = React.useState<Room[]>([]);
 
   React.useEffect(() => {
     if (!mountRef.current) return;
@@ -329,16 +329,6 @@ const SpyGame: React.FC = () => {
     const player1 = new Player(scene, 0xff0000, -5);
     const player2 = new Player(scene, 0x0000ff, 5);
     let bombs: Bomb[] = [];
-
-    // Create clues
-    const createClue = (x: number, y: number) => {
-      const clueGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-      const clueMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-      const clueMesh = new THREE.Mesh(clueGeometry, clueMaterial);
-      clueMesh.position.set(x, y, 0);
-      scene.add(clueMesh);
-      return clueMesh;
-    };
 
     // Controls
     const keys = {
@@ -419,7 +409,7 @@ const SpyGame: React.FC = () => {
     };
 
     const rooms = generateRooms();
-    const { player1Spawn, player2Spawn } = findOppositeRooms(rooms);
+    const { player1Spawn } = findOppositeRooms(rooms);
 
     // Create all rooms first
     rooms.forEach(room => createRoom(room.id, rooms, scene));

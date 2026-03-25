@@ -10,6 +10,37 @@ Two players compete to score points by getting the ball into their opponent's po
 - Players can bounce the ball by touching it or using spell explosions
 - The map loops horizontally (go right, appear on left)
 
+## New Modernized Build
+
+- Match setup screen with seeded procedural generation controls
+- Background selector for `bg1` through `bg7`, plus random rotation mode
+- Parallax edge layers for cave depth and better visual motion
+- Improved spell explosions with cooldown and radial impulse behavior
+- Win condition flow with end-match overlay and quick arena reroll
+
+## Local Development
+
+```bash
+npm install
+npm run dev
+```
+
+## Production Build
+
+```bash
+npm run build
+```
+
+## Vercel Deployment
+
+1. Import this repository into Vercel.
+2. Framework preset: Other.
+3. Build command: `npm run build`
+4. Output directory: `build`
+5. Deploy.
+
+`vercel.json` is already included with SPA rewrite routing so all paths resolve to `index.html`.
+
 ## Development
 
 Current State:
