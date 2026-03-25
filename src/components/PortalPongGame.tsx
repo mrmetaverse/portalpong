@@ -38,6 +38,18 @@ interface ParallaxLayers {
   edgeFog?: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
 }
 
+interface PortalVisual {
+  group: THREE.Group;
+  ring: THREE.Mesh<THREE.TorusGeometry, THREE.MeshPhongMaterial>;
+  rim: THREE.Mesh<THREE.TorusGeometry, THREE.MeshPhongMaterial>;
+  core: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  glow: THREE.Sprite;
+  fog: THREE.Sprite;
+  beam: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshBasicMaterial>;
+  light: THREE.PointLight;
+  pulseOffset: number;
+}
+
 interface ControllerFrame {
   left: boolean;
   right: boolean;
@@ -902,23 +914,126 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     platforms.push(leftWall);
     platforms.push(rightWall);
 
-    const createPortal = (x: number) => {
-      const curve = new THREE.EllipseCurve(
-        x, 2.5,
-        0.5, 1.2,
-        0, 2 * Math.PI,
-        true
+    const portalFogTexture = (() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const gradient = ctx.createRadialGradient(64, 64, 8, 64, 64, 64);
+        gradient.addColorStop(0, 'rgba(255,255,255,0.95)');
+        gradient.addColorStop(0.35, 'rgba(255,255,255,0.5)');
+        gradient.addColorStop(0.8, 'rgba(255,255,255,0.08)');
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 128, 128);
+      }
+      const textureFromCanvas = new THREE.CanvasTexture(canvas);
+      textureFromCanvas.colorSpace = THREE.SRGBColorSpace;
+      return textureFromCanvas;
+    })();
+
+    const createPortal = (x: number): PortalVisual => {
+      const portalColor = x < 0 ? 0xff4a4a : 0x4a7dff;
+      const group = new THREE.Group();
+      group.position.set(x, 2.5, 0.05);
+
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.9, 0.12, 16, 48),
+        new THREE.MeshPhongMaterial({
+          color: portalColor,
+          emissive: portalColor,
+          emissiveIntensity: 0.7,
+          transparent: true,
+          opacity: 0.8
+        })
       );
-      const points = curve.getPoints(50);
-      const portalGeometry = new THREE.BufferGeometry().setFromPoints(points);
-      const portalMaterial = new THREE.LineBasicMaterial({ color: x < 0 ? 0xff0000 : 0x0000ff });
-      const portal = new THREE.Line(portalGeometry, portalMaterial);
-      scene.add(portal);
-      return portal;
+      group.add(ring);
+
+      const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.93, 0.05, 12, 48),
+        new THREE.MeshPhongMaterial({
+          color: 0xffffff,
+          emissive: portalColor,
+          emissiveIntensity: 0.5,
+          transparent: true,
+          opacity: 0.55
+        })
+      );
+      group.add(rim);
+
+      const core = new THREE.Mesh(
+        new THREE.CircleGeometry(0.78, 48),
+        new THREE.MeshBasicMaterial({
+          color: portalColor,
+          transparent: true,
+          opacity: 0.22,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide
+        })
+      );
+      group.add(core);
+
+      const glow = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: portalFogTexture,
+          color: portalColor,
+          transparent: true,
+          opacity: 0.35,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        })
+      );
+      glow.scale.set(2.1, 2.1, 1);
+      glow.position.set(0, 0, -0.03);
+      group.add(glow);
+
+      const fog = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: portalFogTexture,
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.15,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        })
+      );
+      fog.scale.set(3.2, 2.6, 1);
+      fog.position.set(0, -0.12, -0.08);
+      group.add(fog);
+
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.38, 0.7, 2.1, 24, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: portalColor,
+          transparent: true,
+          opacity: 0.14,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending
+        })
+      );
+      beam.position.set(0, 0, -0.2);
+      group.add(beam);
+
+      const light = new THREE.PointLight(portalColor, 0.9, 7.5, 1.8);
+      light.position.set(0, 0, 1.1);
+      group.add(light);
+
+      scene.add(group);
+      return {
+        group,
+        ring,
+        rim,
+        core,
+        glow,
+        fog,
+        beam,
+        light,
+        pulseOffset: random() * Math.PI * 2
+      };
     };
 
-    createPortal(-9);
-    createPortal(9);
+    const portals: PortalVisual[] = [createPortal(-9), createPortal(9)];
 
     const floor = new THREE.Mesh(
       new THREE.BoxGeometry(20, 0.5, 5),
@@ -1260,6 +1375,21 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       leftWall.updateBounds(time);
       rightWall.updateBounds(time + Math.PI);
 
+      portals.forEach((portal, idx) => {
+        const pulse = 0.5 + 0.5 * Math.sin(time * 3.2 + portal.pulseOffset);
+        const slowPulse = 0.5 + 0.5 * Math.sin(time * 1.35 + portal.pulseOffset + idx);
+        portal.group.rotation.z = Math.sin(time * 0.65 + portal.pulseOffset) * 0.05;
+        portal.ring.rotation.z -= 0.01;
+        portal.rim.rotation.z += 0.014;
+        portal.core.material.opacity = 0.16 + pulse * 0.24;
+        portal.glow.material.opacity = 0.18 + pulse * 0.25;
+        portal.fog.material.opacity = 0.08 + slowPulse * 0.13;
+        portal.glow.scale.setScalar(1.9 + pulse * 0.45);
+        portal.fog.scale.set(2.9 + slowPulse * 0.5, 2.4 + slowPulse * 0.35, 1);
+        portal.beam.material.opacity = 0.08 + pulse * 0.12;
+        portal.light.intensity = 0.6 + pulse * 0.8;
+      });
+
       if (mobileControlsEnabled) {
         const moveStick = moveStickRef.current;
         const aimStick = aimStickRef.current;
@@ -1448,6 +1578,20 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
+      portals.forEach((portal) => {
+        scene.remove(portal.group);
+        portal.ring.geometry.dispose();
+        portal.ring.material.dispose();
+        portal.rim.geometry.dispose();
+        portal.rim.material.dispose();
+        portal.core.geometry.dispose();
+        portal.core.material.dispose();
+        portal.glow.material.dispose();
+        portal.fog.material.dispose();
+        portal.beam.geometry.dispose();
+        portal.beam.material.dispose();
+      });
+      portalFogTexture.dispose();
       texture.dispose();
       parallaxLayers.far.material.dispose();
       parallaxLayers.far.geometry.dispose();
