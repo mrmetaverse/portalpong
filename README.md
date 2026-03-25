@@ -41,6 +41,23 @@ npm run build
 
 `vercel.json` is already included with SPA rewrite routing so all paths resolve to `index.html`.
 
+## Internet Matchmaking Setup
+
+Room sync across different devices uses Redis-backed Vercel serverless APIs:
+
+- `POST /api/match/control`
+- `GET /api/match/state`
+
+To enable this in production:
+
+1. Add a Redis integration from Vercel Marketplace (Upstash Redis).
+2. In project environment variables, set:
+   - `UPSTASH_REDIS_REST_URL`
+   - `UPSTASH_REDIS_REST_TOKEN`
+3. Redeploy.
+
+If Redis env vars are missing, matchmaking API calls fail and matches fall back to local AI behavior.
+
 ## Development
 
 Current State:

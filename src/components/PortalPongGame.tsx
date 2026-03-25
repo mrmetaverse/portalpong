@@ -15,6 +15,7 @@ export interface PortalPongConfig {
   preset: PortalPongConfigPreset;
   parallax: boolean;
   seed: number;
+  aiDifficulty?: number;
   localPlayer?: 'player1' | 'player2';
   mode?: 'ai' | 'matchmaking';
   matchmakingRoom?: string;
@@ -42,6 +43,7 @@ interface ControllerFrame {
   right: boolean;
   down: boolean;
   jumpQueued: boolean;
+  jumpHeld: boolean;
   castQueued: boolean;
   aimX: number;
   aimY: number;
@@ -332,7 +334,15 @@ class Ball {
   }
 }
 
-const createWizardAvatar = (color: number, isLeftSide: boolean) => {
+interface WizardRig {
+  root: THREE.Group;
+  hat: THREE.Mesh;
+  wand: THREE.Mesh;
+  glow: THREE.Mesh;
+  baseWandRotationZ: number;
+}
+
+const createWizardAvatar = (color: number, isLeftSide: boolean): WizardRig => {
   const group = new THREE.Group();
 
   const body = new THREE.Mesh(
@@ -360,7 +370,8 @@ const createWizardAvatar = (color: number, isLeftSide: boolean) => {
     new THREE.CylinderGeometry(0.02, 0.02, 0.55, 10),
     new THREE.MeshPhongMaterial({ color: 0x4a2c17 })
   );
-  wand.rotation.z = isLeftSide ? -0.5 : 0.5;
+  const baseWandRotationZ = isLeftSide ? -0.5 : 0.5;
+  wand.rotation.z = baseWandRotationZ;
   wand.position.set(isLeftSide ? -0.34 : 0.34, 0.32, 0.08);
   group.add(wand);
 
@@ -371,11 +382,18 @@ const createWizardAvatar = (color: number, isLeftSide: boolean) => {
   glow.position.copy(wand.position).add(new THREE.Vector3(isLeftSide ? -0.03 : 0.03, 0.3, 0));
   group.add(glow);
 
-  return group;
+  return {
+    root: group,
+    hat,
+    wand,
+    glow,
+    baseWandRotationZ
+  };
 };
 
 class Player {
   mesh: THREE.Group;
+  rig: WizardRig;
   velocity: THREE.Vector3;
   onGround: boolean;
   direction: THREE.Vector3;
@@ -384,9 +402,17 @@ class Player {
   id: 'player1' | 'player2';
   jumpBufferFrames: number;
   coyoteFrames: number;
+  jumpsUsed: number;
+  jumpHeld: boolean;
+  holdJumpFrames: number;
+  holdFramesAppliedThisJump: number;
+  firstJumpWasLong: boolean;
+  facing: 1 | -1;
+  wobbleTime: number;
 
   constructor(scene: THREE.Scene, color: number, startX: number, id: 'player1' | 'player2') {
-    this.mesh = createWizardAvatar(color, startX < 0);
+    this.rig = createWizardAvatar(color, startX < 0);
+    this.mesh = this.rig.root;
     this.mesh.position.set(startX, 0.52, 0);
     this.velocity = new THREE.Vector3(0, 0, 0);
     this.onGround = true;
@@ -396,6 +422,14 @@ class Player {
     this.id = id;
     this.jumpBufferFrames = 0;
     this.coyoteFrames = 0;
+    this.jumpsUsed = 0;
+    this.jumpHeld = false;
+    this.holdJumpFrames = 0;
+    this.holdFramesAppliedThisJump = 0;
+    this.firstJumpWasLong = false;
+    this.facing = startX < 0 ? 1 : -1;
+    this.wobbleTime = Math.random() * Math.PI * 2;
+    this.mesh.rotation.y = this.facing === 1 ? 0 : Math.PI;
     scene.add(this.mesh);
   }
 
@@ -411,19 +445,37 @@ class Player {
     }
     if (this.onGround) {
       this.coyoteFrames = 7;
+      this.jumpsUsed = 0;
+      this.firstJumpWasLong = false;
     } else if (this.coyoteFrames > 0) {
       this.coyoteFrames -= 1;
     }
 
     if (!this.onGround || this.velocity.y > 0) {
+      // Classic platformer jump shaping: hold to stretch arc, tap for short hop.
+      const canApplyHold = this.jumpHeld && this.holdJumpFrames > 0 && this.velocity.y > 0;
+      if (canApplyHold) {
+        this.velocity.y += 0.0062;
+        this.holdJumpFrames -= 1;
+        this.holdFramesAppliedThisJump += 1;
+        if (this.jumpsUsed === 1 && this.holdFramesAppliedThisJump >= 3) {
+          this.firstJumpWasLong = true;
+        }
+      }
       this.velocity.y -= 0.014;
     }
 
-    if (this.jumpBufferFrames > 0 && (this.onGround || this.coyoteFrames > 0)) {
-      this.velocity.y = 0.44;
+    const canUseGroundJump = this.onGround || this.coyoteFrames > 0;
+    const canUseAirJump = this.jumpsUsed === 1 && !this.firstJumpWasLong;
+    if (this.jumpBufferFrames > 0 && (canUseGroundJump || canUseAirJump)) {
+      const quickJumpVelocity = 0.315;
+      this.velocity.y = quickJumpVelocity;
       this.jumpBufferFrames = 0;
       this.coyoteFrames = 0;
       this.onGround = false;
+      this.jumpsUsed += 1;
+      this.holdJumpFrames = 10;
+      this.holdFramesAppliedThisJump = 0;
     }
 
     const nextPosition = this.mesh.position.clone().add(this.velocity);
@@ -484,7 +536,16 @@ class Player {
     if (this.mesh.position.x > 10) this.mesh.position.x = -10;
     if (this.mesh.position.x < -10) this.mesh.position.x = 10;
 
-    this.velocity.x *= 0.9;
+    this.velocity.x *= 0.78;
+
+    const horizontalSpeed = Math.abs(this.velocity.x);
+    this.wobbleTime += 0.08 + horizontalSpeed * 0.6;
+    const wobble = Math.sin(this.wobbleTime) * Math.min(0.12, horizontalSpeed * 0.5 + 0.03);
+    this.rig.hat.rotation.z = wobble;
+    this.rig.hat.rotation.x = Math.cos(this.wobbleTime * 1.4) * 0.04;
+    this.rig.wand.rotation.z = this.rig.baseWandRotationZ + wobble * 1.8;
+    this.rig.wand.rotation.x = Math.sin(this.wobbleTime * 1.9) * 0.1;
+    this.rig.glow.position.y = 0.62 + Math.abs(wobble) * 0.2;
   }
 
   queueJump() {
@@ -492,13 +553,21 @@ class Player {
   }
 
   moveLeft() {
-    this.velocity.x = Math.max(this.velocity.x - 0.055, -0.24);
+    this.velocity.x = Math.max(this.velocity.x - 0.018, -0.085);
     this.direction.x = -1;
+    this.facing = -1;
+    this.mesh.rotation.y = Math.PI;
   }
 
   moveRight() {
-    this.velocity.x = Math.min(this.velocity.x + 0.055, 0.24);
+    this.velocity.x = Math.min(this.velocity.x + 0.018, 0.085);
     this.direction.x = 1;
+    this.facing = 1;
+    this.mesh.rotation.y = 0;
+  }
+
+  setJumpHeld(isHeld: boolean) {
+    this.jumpHeld = isHeld;
   }
 
   setAimDirection(worldTarget: THREE.Vector3) {
@@ -563,9 +632,13 @@ class MovingWall implements Platform {
 
 const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
   const mountRef = React.useRef<HTMLDivElement>(null);
+  const resumeFromPauseRef = React.useRef<() => void>(() => {});
+  const exitMatchRef = React.useRef<() => void>(() => {});
   const [matchSeedBump, setMatchSeedBump] = React.useState(0);
   const [chosenBackground, setChosenBackground] = React.useState<Exclude<PortalPongConfig['background'], 'random'> | null>(null);
   const [connectionStatus, setConnectionStatus] = React.useState('Offline AI');
+  const [pauseMenuOpen, setPauseMenuOpen] = React.useState(false);
+  const [resumeCountdown, setResumeCountdown] = React.useState<number | null>(null);
   const [gameState, setGameState] = React.useState<GameState>({
     player1Score: 0,
     player2Score: 0,
@@ -578,10 +651,11 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     preset: config?.preset ?? 'normal',
     parallax: config?.parallax ?? true,
     seed: (config?.seed ?? 42) + matchSeedBump,
+    aiDifficulty: THREE.MathUtils.clamp(config?.aiDifficulty ?? 3, 1, 10),
     localPlayer: config?.localPlayer ?? 'player1',
     mode: config?.mode ?? 'ai',
     matchmakingRoom: config?.matchmakingRoom ?? ''
-  }), [config?.background, config?.localPlayer, config?.matchmakingRoom, config?.mode, config?.parallax, config?.preset, config?.seed, matchSeedBump]);
+  }), [config?.aiDifficulty, config?.background, config?.localPlayer, config?.matchmakingRoom, config?.mode, config?.parallax, config?.preset, config?.seed, matchSeedBump]);
 
   React.useEffect(() => {
     if (!mountRef.current) return;
@@ -597,6 +671,8 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       gameStatus: 'playing',
       winner: null
     });
+    setPauseMenuOpen(false);
+    setResumeCountdown(null);
     
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
@@ -627,7 +703,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     const texture = new THREE.TextureLoader().load(`/${selectedBackground}.png`);
     texture.wrapS = THREE.MirroredRepeatWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.repeat.set(0.78, 0.86);
+    texture.repeat.set(0.54, 0.62);
     texture.colorSpace = THREE.SRGBColorSpace;
 
     const setupParallax = (bounds: Bounds): ParallaxLayers => {
@@ -635,7 +711,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         new THREE.PlaneGeometry(bounds.width * 1.8, bounds.height * 1.8),
         new THREE.MeshBasicMaterial({ map: texture, opacity: 0.9, transparent: true })
       );
-      far.position.set(0, 3.7, -14);
+      far.position.set(0, 3.6, -10.5);
       scene.add(far);
 
       if (!mergedConfig.parallax) {
@@ -645,7 +721,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       const midTexture = texture.clone();
       midTexture.wrapS = THREE.MirroredRepeatWrapping;
       midTexture.wrapT = THREE.ClampToEdgeWrapping;
-      midTexture.repeat.set(0.92, 0.92);
+      midTexture.repeat.set(0.64, 0.7);
       midTexture.colorSpace = THREE.SRGBColorSpace;
       const mid = new THREE.Mesh(
         new THREE.PlaneGeometry(bounds.width * 2.0, bounds.height * 1.95),
@@ -655,13 +731,13 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
           opacity: 0.32
         })
       );
-      mid.position.set(0, 3.5, -10);
+      mid.position.set(0, 3.45, -9.1);
       scene.add(mid);
 
       const nearTexture = texture.clone();
       nearTexture.wrapS = THREE.MirroredRepeatWrapping;
       nearTexture.wrapT = THREE.ClampToEdgeWrapping;
-      nearTexture.repeat.set(1.08, 1.0);
+      nearTexture.repeat.set(0.78, 0.82);
       nearTexture.colorSpace = THREE.SRGBColorSpace;
       const near = new THREE.Mesh(
         new THREE.PlaneGeometry(bounds.width * 2.2, bounds.height * 2.05),
@@ -671,7 +747,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
           opacity: 0.2
         })
       );
-      near.position.set(0, 3.3, -7);
+      near.position.set(0, 3.3, -7.9);
       scene.add(near);
 
       const edgeFog = new THREE.Mesh(
@@ -701,7 +777,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
           `
         })
       );
-      edgeFog.position.set(0, 3.2, -4.5);
+      edgeFog.position.set(0, 3.2, -5.2);
       scene.add(edgeFog);
 
       return { far, mid, near, edgeFog };
@@ -719,13 +795,19 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     const ball = new Ball(scene);
     let activeSpells: Spell[] = [];
     let matchEnded = false;
+    let pausedForMenu = false;
+    let countdownEndAt = 0;
+    let lastCountdownValue: number | null = null;
     let remoteLastSeenAt = 0;
     let lastConnectionLabel = '';
-    let publishCounter = 0;
     let remoteJumpSeq = 0;
     let remoteCastSeq = 0;
     let aiCastCooldown = 0;
-    let matchmakingChannel: BroadcastChannel | null = null;
+    let aiReactionFrames = 0;
+    let networkSendBusy = false;
+    let networkPollBusy = false;
+    let lastNetworkSendAt = 0;
+    let lastNetworkPollAt = 0;
 
     const generatePlatforms = () => {
       const platforms: Platform[] = [];
@@ -786,6 +868,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       right: false,
       down: false,
       jumpQueued: false,
+      jumpHeld: false,
       castQueued: false,
       aimX: activePlayer.mesh.position.x + (localRole === 'player1' ? 2 : -2),
       aimY: activePlayer.mesh.position.y + 0.4
@@ -795,9 +878,46 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       right: false,
       down: false,
       jumpQueued: false,
+      jumpHeld: false,
       castQueued: false,
       aimX: controlledByAi.mesh.position.x + (localRole === 'player1' ? -2 : 2),
       aimY: controlledByAi.mesh.position.y + 0.4
+    };
+
+    const clearLocalInput = () => {
+      localInput.left = false;
+      localInput.right = false;
+      localInput.down = false;
+      localInput.jumpHeld = false;
+      localInput.jumpQueued = false;
+      localInput.castQueued = false;
+    };
+
+    const beginPause = () => {
+      if (matchEnded || pausedForMenu || performance.now() < countdownEndAt) {
+        return;
+      }
+      pausedForMenu = true;
+      clearLocalInput();
+      setPauseMenuOpen(true);
+    };
+
+    const beginResumeCountdown = () => {
+      if (matchEnded || !pausedForMenu) {
+        return;
+      }
+      pausedForMenu = false;
+      countdownEndAt = performance.now() + 3000;
+      lastCountdownValue = 3;
+      setPauseMenuOpen(false);
+      setResumeCountdown(3);
+    };
+
+    resumeFromPauseRef.current = beginResumeCountdown;
+    exitMatchRef.current = () => {
+      setPauseMenuOpen(false);
+      setResumeCountdown(null);
+      onExit?.();
     };
 
     const mouse = new THREE.Vector2();
@@ -820,30 +940,55 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (pausedForMenu) {
+          beginResumeCountdown();
+        } else {
+          beginPause();
+        }
+        return;
+      }
+      if (pausedForMenu || performance.now() < countdownEndAt || matchEnded) {
+        return;
+      }
       switch(e.key) {
         case 'a': localInput.left = true; break;
         case 'd': localInput.right = true; break;
         case 'w':
         case ' ':
           localInput.jumpQueued = true;
+          localInput.jumpHeld = true;
           break;
         case 's': localInput.down = true; break;
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (pausedForMenu || performance.now() < countdownEndAt || matchEnded) {
+        return;
+      }
       switch(e.key) {
         case 'a': localInput.left = false; break;
         case 'd': localInput.right = false; break;
+        case 'w':
+        case ' ':
+          localInput.jumpHeld = false;
+          break;
         case 's': localInput.down = false; break;
       }
     };
 
     const handlePointerMove = (e: PointerEvent) => {
+      if (pausedForMenu || performance.now() < countdownEndAt || matchEnded) {
+        return;
+      }
       syncAimFromPointer(e);
     };
 
     const handlePointerDown = (e: PointerEvent) => {
+      if (pausedForMenu || performance.now() < countdownEndAt || matchEnded) {
+        return;
+      }
       syncAimFromPointer(e);
       localInput.castQueued = true;
     };
@@ -852,39 +997,27 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     window.addEventListener('keyup', handleKeyUp);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
-
-    if (mergedConfig.mode === 'matchmaking' && mergedConfig.matchmakingRoom) {
-      matchmakingChannel = new BroadcastChannel(`portalpong-room-${mergedConfig.matchmakingRoom}`);
-      matchmakingChannel.onmessage = (event: MessageEvent) => {
-        const payload = event.data as {
-          type: 'control';
-          from: 'player1' | 'player2';
-          input: ControllerFrame;
-          jumpSeq: number;
-          castSeq: number;
-          sentAt: number;
-        };
-
-        if (!payload || payload.type !== 'control' || payload.from === localRole) {
-          return;
-        }
-
-        remoteLastSeenAt = performance.now();
-        remoteInput.left = payload.input.left;
-        remoteInput.right = payload.input.right;
-        remoteInput.down = payload.input.down;
-        remoteInput.aimX = payload.input.aimX;
-        remoteInput.aimY = payload.input.aimY;
-        if (payload.jumpSeq > remoteJumpSeq) {
-          remoteInput.jumpQueued = true;
-          remoteJumpSeq = payload.jumpSeq;
-        }
-        if (payload.castSeq > remoteCastSeq) {
-          remoteInput.castQueued = true;
-          remoteCastSeq = payload.castSeq;
-        }
-      };
-    }
+    const applyRemoteFrame = (payload: {
+      input: Pick<ControllerFrame, 'left' | 'right' | 'down' | 'jumpHeld' | 'aimX' | 'aimY'>;
+      jumpSeq: number;
+      castSeq: number;
+    }) => {
+      remoteLastSeenAt = performance.now();
+      remoteInput.left = payload.input.left;
+      remoteInput.right = payload.input.right;
+      remoteInput.down = payload.input.down;
+      remoteInput.jumpHeld = payload.input.jumpHeld;
+      remoteInput.aimX = payload.input.aimX;
+      remoteInput.aimY = payload.input.aimY;
+      if (payload.jumpSeq > remoteJumpSeq) {
+        remoteInput.jumpQueued = true;
+        remoteJumpSeq = payload.jumpSeq;
+      }
+      if (payload.castSeq > remoteCastSeq) {
+        remoteInput.castQueued = true;
+        remoteCastSeq = payload.castSeq;
+      }
+    };
 
     const pushBallByExplosion = (spell: Spell) => {
       if (!spell.explosionMesh || spell.ballImpulseApplied) {
@@ -922,6 +1055,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
 
     const applyControllerToPlayer = (player: Player, frame: ControllerFrame) => {
       player.pressingDown = frame.down;
+      player.setJumpHeld(frame.jumpHeld);
       if (frame.left) {
         player.moveLeft();
       }
@@ -943,26 +1077,64 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     };
 
     const updateAiController = (aiPlayer: Player, frame: ControllerFrame) => {
-      const targetX = ball.mesh.position.x + ball.velocity.x * 6;
-      const deltaX = targetX - aiPlayer.mesh.position.x;
-      frame.left = deltaX < -0.25;
-      frame.right = deltaX > 0.25;
-      frame.down = false;
-      frame.aimX = ball.mesh.position.x;
-      frame.aimY = ball.mesh.position.y + 0.15;
+      const aiDifficulty = mergedConfig.aiDifficulty ?? 3;
+      const linearSkill = THREE.MathUtils.clamp((aiDifficulty - 1) / 9, 0, 1);
+      // Steep pacing curve: difficulty 5 is ~25% of full-speed behavior, difficulty 10 is full speed.
+      const pace = Math.pow(linearSkill, 1.7);
+      const lerp = (slow: number, fast: number) => THREE.MathUtils.lerp(slow, fast, pace);
 
-      const shouldJump = aiPlayer.onGround && ball.mesh.position.y > aiPlayer.mesh.position.y + 0.5 && Math.abs(deltaX) < 2.7;
-      if (shouldJump) {
-        frame.jumpQueued = true;
+      const reactionMin = Math.round(lerp(70, 16));
+      const reactionVariance = Math.round(lerp(50, 12));
+      const aimErrorXRange = lerp(4.2, 1.3);
+      const aimErrorYRange = lerp(1.7, 0.8);
+      const prediction = lerp(0.06, 0.85);
+      const lateralNoise = lerp(2.8, 1.4);
+      const deadZone = lerp(1.9, 1.1);
+      const hesitationChance = lerp(0.7, 0.26);
+      const jumpChance = lerp(0.1, 0.45);
+      const castChance = lerp(0.02, 0.12);
+      const castRange = lerp(2.1, 3.8);
+      const lineupRange = lerp(1.4, 2.9);
+      const castCooldownMin = Math.round(lerp(260, 140));
+      const castCooldownVariance = Math.round(lerp(140, 80));
+
+      frame.jumpHeld = aiPlayer.velocity.y > 0.08 && random() < lerp(0.08, 0.35);
+      if (aiReactionFrames > 0) {
+        aiReactionFrames -= 1;
+      } else {
+        const aimErrorX = randomBetween(random, -aimErrorXRange, aimErrorXRange);
+        const aimErrorY = randomBetween(random, -aimErrorYRange, aimErrorYRange);
+        const targetX = ball.mesh.position.x + ball.velocity.x * prediction + randomBetween(random, -lateralNoise, lateralNoise);
+        const deltaX = targetX - aiPlayer.mesh.position.x;
+        frame.left = deltaX < -deadZone;
+        frame.right = deltaX > deadZone;
+        if (random() < hesitationChance) {
+          frame.left = false;
+          frame.right = false;
+        }
+        frame.down = false;
+        frame.aimX = ball.mesh.position.x + aimErrorX;
+        frame.aimY = ball.mesh.position.y + 0.1 + aimErrorY;
+
+        const shouldJump = aiPlayer.onGround &&
+          ball.mesh.position.y > aiPlayer.mesh.position.y + 0.75 &&
+          Math.abs(deltaX) < 2.2 &&
+          random() < jumpChance;
+        if (shouldJump) {
+          frame.jumpQueued = true;
+        }
+
+        aiReactionFrames = reactionMin + Math.floor(random() * Math.max(1, reactionVariance));
       }
 
       if (aiCastCooldown > 0) {
         aiCastCooldown -= 1;
       }
       const castDistance = aiPlayer.mesh.position.distanceTo(ball.mesh.position);
-      if (aiCastCooldown === 0 && castDistance < 5.5) {
+      const hasLineup = Math.abs(ball.mesh.position.x - aiPlayer.mesh.position.x) < lineupRange;
+      if (aiCastCooldown === 0 && castDistance < castRange && hasLineup && random() < castChance) {
         frame.castQueued = true;
-        aiCastCooldown = 28 + Math.floor(random() * 26);
+        aiCastCooldown = castCooldownMin + Math.floor(random() * Math.max(1, castCooldownVariance));
       }
     };
 
@@ -973,20 +1145,40 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         return;
       }
 
+      if (pausedForMenu) {
+        renderer.render(scene, camera);
+        return;
+      }
+
+      const remainingCountdownMs = countdownEndAt - performance.now();
+      if (remainingCountdownMs > 0) {
+        const nextCountdown = Math.ceil(remainingCountdownMs / 1000);
+        if (nextCountdown !== lastCountdownValue) {
+          lastCountdownValue = nextCountdown;
+          setResumeCountdown(nextCountdown);
+        }
+        renderer.render(scene, camera);
+        return;
+      }
+      if (lastCountdownValue !== null) {
+        lastCountdownValue = null;
+        setResumeCountdown(null);
+      }
+
       if (mergedConfig.parallax) {
         const trackedX = (player1.mesh.position.x + player2.mesh.position.x + ball.mesh.position.x) / 3;
-        parallaxLayers.far.material.map!.offset.x = trackedX * 0.0035;
-        parallaxLayers.far.material.map!.offset.y = ball.mesh.position.y * 0.0005;
+        parallaxLayers.far.material.map!.offset.x = trackedX * 0.0045;
+        parallaxLayers.far.material.map!.offset.y = ball.mesh.position.y * 0.0008;
         if (parallaxLayers.mid?.material.map) {
-          parallaxLayers.mid.material.map.offset.x = trackedX * 0.0085;
-          parallaxLayers.mid.material.map.offset.y = ball.mesh.position.y * 0.0015;
+          parallaxLayers.mid.material.map.offset.x = trackedX * 0.0068;
+          parallaxLayers.mid.material.map.offset.y = ball.mesh.position.y * 0.0012;
         }
         if (parallaxLayers.near?.material.map) {
-          parallaxLayers.near.material.map.offset.x = trackedX * 0.017;
-          parallaxLayers.near.material.map.offset.y = ball.mesh.position.y * 0.0028;
+          parallaxLayers.near.material.map.offset.x = trackedX * 0.0092;
+          parallaxLayers.near.material.map.offset.y = ball.mesh.position.y * 0.0018;
         }
         if (parallaxLayers.edgeFog) {
-          parallaxLayers.edgeFog.position.x = trackedX * 0.02;
+          parallaxLayers.edgeFog.position.x = trackedX * 0.012;
         }
       }
 
@@ -1006,25 +1198,75 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       const nowMs = performance.now();
       const remoteConnected = mergedConfig.mode === 'matchmaking' && nowMs - remoteLastSeenAt < REMOTE_STALE_MS;
       if (mergedConfig.mode === 'matchmaking') {
-        if (publishCounter % 2 === 0) {
-          matchmakingChannel?.postMessage({
-            type: 'control',
-            from: localRole,
+        const roomCode = (mergedConfig.matchmakingRoom ?? '').trim().toUpperCase();
+        const shouldSend = roomCode && nowMs - lastNetworkSendAt > 70 && !networkSendBusy;
+        const shouldPoll = roomCode && nowMs - lastNetworkPollAt > 120 && !networkPollBusy;
+
+        if (shouldSend) {
+          networkSendBusy = true;
+          lastNetworkSendAt = nowMs;
+          const payload = {
+            room: roomCode,
+            player: localRole,
             input: {
               left: localInput.left,
               right: localInput.right,
               down: localInput.down,
-              jumpQueued: false,
-              castQueued: false,
+              jumpHeld: localInput.jumpHeld,
               aimX: localInput.aimX,
               aimY: localInput.aimY
             },
             jumpSeq: localJumpSeq,
             castSeq: localCastSeq,
-            sentAt: nowMs
+            sentAt: Date.now()
+          };
+          fetch('/api/match/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).catch(() => {
+            // Swallow network hiccups; AI fallback handles gaps.
+          }).finally(() => {
+            networkSendBusy = false;
           });
         }
-        publishCounter += 1;
+
+        if (shouldPoll) {
+          networkPollBusy = true;
+          lastNetworkPollAt = nowMs;
+          fetch(`/api/match/state?room=${encodeURIComponent(roomCode)}`)
+            .then((response) => response.ok ? response.json() : null)
+            .then((payload: {
+              player1: null | { input: ControllerFrame; jumpSeq: number; castSeq: number };
+              player2: null | { input: ControllerFrame; jumpSeq: number; castSeq: number };
+            } | null) => {
+              if (!payload) {
+                return;
+              }
+              const remoteRole = localRole === 'player1' ? 'player2' : 'player1';
+              const remotePayload = remoteRole === 'player1' ? payload.player1 : payload.player2;
+              if (remotePayload) {
+                applyRemoteFrame({
+                  input: {
+                    left: Boolean(remotePayload.input.left),
+                    right: Boolean(remotePayload.input.right),
+                    down: Boolean(remotePayload.input.down),
+                    jumpHeld: Boolean(remotePayload.input.jumpHeld),
+                    aimX: Number(remotePayload.input.aimX) || 0,
+                    aimY: Number(remotePayload.input.aimY) || 0
+                  },
+                  jumpSeq: Number(remotePayload.jumpSeq) || 0,
+                  castSeq: Number(remotePayload.castSeq) || 0
+                });
+              }
+            })
+            .catch(() => {
+              // Keep running locally with AI fallback on network failures.
+            })
+            .finally(() => {
+              networkPollBusy = false;
+            });
+        }
       }
 
       if (mergedConfig.mode === 'matchmaking' && remoteConnected) {
@@ -1106,7 +1348,6 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
-      matchmakingChannel?.close();
       texture.dispose();
       parallaxLayers.far.material.dispose();
       parallaxLayers.far.geometry.dispose();
@@ -1126,42 +1367,62 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       }
       renderer.dispose();
     };
-  }, [mergedConfig]);
+  }, [mergedConfig, onExit]);
 
   return (
     <div className="w-full h-screen">
       <div ref={mountRef} className="w-full h-full" />
-      <div className="absolute top-4 left-4 bg-black/60 text-white p-4 rounded-md border border-white/20">
+      <div className="absolute top-4 left-4 bg-slate-900/35 backdrop-blur-md text-white p-4 rounded-md border border-white/20 shadow-[0_0_20px_rgba(15,23,42,0.35)]">
         <div className="font-semibold mb-1">PortalPong</div>
         <div>Red Score: {gameState.player1Score}</div>
         <div>Blue Score: {gameState.player2Score}</div>
         <div className="text-xs mt-2 text-slate-300">Win Score: {WIN_SCORE}</div>
         <div className="text-xs text-slate-300">Background: {chosenBackground ?? 'loading'}</div>
         <div className="text-xs text-slate-300">Mode: {mergedConfig.mode === 'matchmaking' ? 'Matchmaking' : 'Vs AI'}</div>
+        {mergedConfig.mode !== 'matchmaking' ? (
+          <div className="text-xs text-slate-300">AI Difficulty: {mergedConfig.aiDifficulty ?? 3}</div>
+        ) : null}
         <div className="text-xs text-slate-300">Local Side: {mergedConfig.localPlayer ?? 'player1'}</div>
         <div className="text-xs text-slate-300">{connectionStatus}</div>
       </div>
-      <div className="absolute top-4 right-4 flex gap-2">
-        <button
-          type="button"
-          onClick={() => setMatchSeedBump((prev) => prev + 1)}
-          className="rounded-md border border-white/40 bg-black/60 px-3 py-2 text-xs text-white"
-        >
-          New Procedural Arena
-        </button>
-        {onExit ? (
-          <button
-            type="button"
-            onClick={onExit}
-            className="rounded-md border border-white/40 bg-black/60 px-3 py-2 text-xs text-white"
-          >
-            Back To Loader
-          </button>
-        ) : null}
-      </div>
+      {pauseMenuOpen ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/45 backdrop-blur-sm">
+          <div className="w-[min(92vw,30rem)] border border-cyan-100/35 bg-slate-900/35 backdrop-blur-md p-6 text-center text-white shadow-[0_0_30px_rgba(34,211,238,0.2)]">
+            <div className="mb-4 text-3xl font-bold uppercase tracking-widest text-cyan-100 drop-shadow-[0_0_10px_rgba(165,243,252,0.5)]">Paused</div>
+            <div className="mb-6 text-xs uppercase tracking-wide text-slate-300">
+              Press ESC to resume with countdown
+            </div>
+            <div className="flex flex-col gap-3">
+              <button
+                type="button"
+                className="border border-yellow-100/45 bg-yellow-200/10 backdrop-blur-sm px-4 py-2 text-sm uppercase tracking-wide text-yellow-100 hover:bg-yellow-200/20"
+                onClick={() => resumeFromPauseRef.current()}
+              >
+                Resume Match
+              </button>
+              {onExit ? (
+                <button
+                  type="button"
+                  className="border border-rose-100/45 bg-rose-200/10 backdrop-blur-sm px-4 py-2 text-sm uppercase tracking-wide text-rose-100 hover:bg-rose-200/20"
+                  onClick={() => exitMatchRef.current()}
+                >
+                  Exit To Menu
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {resumeCountdown !== null ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/35 backdrop-blur-[2px] pointer-events-none">
+          <div className="text-7xl font-extrabold text-yellow-300 drop-shadow-[0_0_12px_rgba(253,224,71,0.7)]">
+            {resumeCountdown}
+          </div>
+        </div>
+      ) : null}
       {gameState.gameStatus === 'ended' ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-          <div className="rounded-lg border border-white/20 bg-black/80 px-6 py-5 text-center text-white">
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/45 backdrop-blur-sm">
+          <div className="rounded-lg border border-white/25 bg-slate-900/40 backdrop-blur-md px-6 py-5 text-center text-white shadow-[0_0_20px_rgba(15,23,42,0.4)]">
             <div className="text-2xl font-semibold mb-2">
               {gameState.winner === 'red' ? 'Red Team Wins' : 'Blue Team Wins'}
             </div>

@@ -26,8 +26,10 @@ const backgrounds: PortalPongConfig['background'][] = [
 type MenuStep = 'level' | 'color' | 'matchmaking';
 
 const RetroPanel: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <div className="w-full max-w-4xl border-4 border-cyan-300/70 bg-black/70 p-4 shadow-[0_0_20px_rgba(34,211,238,0.3)]">
-    <h2 className="mb-4 text-xl font-bold uppercase tracking-wider text-cyan-200">{title}</h2>
+  <div className="w-full max-w-4xl border border-cyan-200/40 bg-slate-900/35 p-4 shadow-[0_0_24px_rgba(34,211,238,0.18)] backdrop-blur-md">
+    <div className="mb-4 border-b border-cyan-100/20 pb-2">
+      <h2 className="text-xl font-bold uppercase tracking-wider text-cyan-100 drop-shadow-[0_0_8px_rgba(165,243,252,0.45)]">{title}</h2>
+    </div>
     {children}
   </div>
 );
@@ -35,11 +37,14 @@ const RetroPanel: React.FC<{ title: string; children: React.ReactNode }> = ({ ti
 const GameLoader: React.FC = () => {
   const [launchGame, setLaunchGame] = React.useState(false);
   const [menuStep, setMenuStep] = React.useState<MenuStep>('level');
+  const [parallaxX, setParallaxX] = React.useState(0);
+  const [parallaxY, setParallaxY] = React.useState(0);
   const [portalConfig, setPortalConfig] = React.useState<PortalPongConfig>({
     background: 'random',
     preset: 'normal',
     parallax: true,
     seed: randomSeed(),
+    aiDifficulty: 1,
     mode: 'ai',
     localPlayer: 'player1',
     matchmakingRoom: ''
@@ -111,32 +116,76 @@ const GameLoader: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 font-mono">
-      <h1 className="text-4xl md:text-6xl font-bold text-yellow-300 mb-2 text-center uppercase tracking-widest">
-        PortalPong
-      </h1>
-      <p className="mb-6 text-xs md:text-sm text-slate-300 text-center max-w-2xl uppercase tracking-wide">
-        Retro Arena Launcher
-      </p>
-      <div className="mb-6 flex gap-2 text-xs uppercase">
+    <div
+      className="relative min-h-screen overflow-hidden bg-slate-950 text-white flex flex-col items-center justify-center p-4 font-mono"
+      onMouseMove={(e) => {
+        const target = e.currentTarget.getBoundingClientRect();
+        const nx = (e.clientX - target.left) / target.width - 0.5;
+        const ny = (e.clientY - target.top) / target.height - 0.5;
+        setParallaxX(nx);
+        setParallaxY(ny);
+      }}
+      onMouseLeave={() => {
+        setParallaxX(0);
+        setParallaxY(0);
+      }}
+    >
+      <div className="absolute inset-0 pointer-events-none">
+        <div
+          className="absolute inset-[-8%] opacity-85"
+          style={{
+            backgroundImage: "url('/bg4.png')",
+            backgroundRepeat: 'no-repeat',
+            backgroundPosition: 'center',
+            backgroundSize: 'cover',
+            transform: `translate(${parallaxX * 8}px, ${parallaxY * 8}px) scale(1.16)`
+          }}
+        />
+        <div
+          className="absolute inset-[-10%] opacity-30 mix-blend-screen"
+          style={{
+            backgroundImage: "url('/bg4.png')",
+            backgroundRepeat: 'no-repeat',
+            backgroundPosition: 'center',
+            backgroundSize: 'cover',
+            filter: 'blur(1.5px)',
+            transform: `translate(${parallaxX * 18}px, ${parallaxY * 14}px) scale(1.22)`
+          }}
+        />
+        <div
+          className="absolute inset-0 bg-black/45"
+          style={{
+            background:
+              'radial-gradient(circle at center, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.58) 70%, rgba(0,0,0,0.86) 100%)'
+          }}
+        />
+      </div>
+      <div className="relative z-10 w-full flex flex-col items-center">
+        <h1 className="text-4xl md:text-6xl font-bold text-yellow-300 mb-2 text-center uppercase tracking-widest">
+          PortalPong
+        </h1>
+        <p className="mb-6 text-xs md:text-sm text-slate-200 text-center max-w-2xl uppercase tracking-wide">
+          Retro Arena Launcher
+        </p>
+      <div className="mb-6 flex gap-2 text-xs uppercase rounded-lg border border-white/10 bg-slate-900/25 px-2 py-2 backdrop-blur-sm">
         <button
           type="button"
           onClick={() => setMenuStep('level')}
-          className={`border px-3 py-1 ${menuStep === 'level' ? 'border-cyan-300 text-cyan-200' : 'border-slate-600 text-slate-300'}`}
+          className={`border px-3 py-1 transition-colors ${menuStep === 'level' ? 'border-cyan-200/80 bg-cyan-300/15 text-cyan-100' : 'border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'}`}
         >
           Level Select
         </button>
         <button
           type="button"
           onClick={() => setMenuStep('color')}
-          className={`border px-3 py-1 ${menuStep === 'color' ? 'border-cyan-300 text-cyan-200' : 'border-slate-600 text-slate-300'}`}
+          className={`border px-3 py-1 transition-colors ${menuStep === 'color' ? 'border-cyan-200/80 bg-cyan-300/15 text-cyan-100' : 'border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'}`}
         >
           Color Select
         </button>
         <button
           type="button"
           onClick={() => setMenuStep('matchmaking')}
-          className={`border px-3 py-1 ${menuStep === 'matchmaking' ? 'border-cyan-300 text-cyan-200' : 'border-slate-600 text-slate-300'}`}
+          className={`border px-3 py-1 transition-colors ${menuStep === 'matchmaking' ? 'border-cyan-200/80 bg-cyan-300/15 text-cyan-100' : 'border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'}`}
         >
           Matchmaking
         </button>
@@ -281,6 +330,17 @@ const GameLoader: React.FC = () => {
                 </button>
               </div>
             </div>
+            <label className="flex flex-col gap-2 text-sm">
+              <span className="text-cyan-100 uppercase text-xs">AI Difficulty ({portalConfig.aiDifficulty ?? 3}/10)</span>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={1}
+                value={portalConfig.aiDifficulty ?? 3}
+                onChange={(e) => updateConfig('aiDifficulty', Number.parseInt(e.target.value, 10))}
+              />
+            </label>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <button
@@ -306,6 +366,7 @@ const GameLoader: React.FC = () => {
           </p>
         </RetroPanel>
       ) : null}
+      </div>
     </div>
   );
 };
