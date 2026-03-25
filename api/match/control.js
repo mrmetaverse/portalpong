@@ -1,6 +1,9 @@
 const { Redis } = require("@upstash/redis");
 
-const redis = Redis.fromEnv();
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN
+});
 const ROOM_TTL_SECONDS = 60 * 30;
 
 module.exports = async function handler(req, res) {
