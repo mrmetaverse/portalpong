@@ -40,13 +40,11 @@ interface ParallaxLayers {
 
 interface PortalVisual {
   group: THREE.Group;
-  ring: THREE.Mesh<THREE.TorusGeometry, THREE.MeshPhongMaterial>;
-  rim: THREE.Mesh<THREE.TorusGeometry, THREE.MeshPhongMaterial>;
-  core: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  ring: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
+  rim: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
+  inner: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   glow: THREE.Sprite;
   fog: THREE.Sprite;
-  beam: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshBasicMaterial>;
-  light: THREE.PointLight;
   pulseOffset: number;
 }
 
@@ -100,6 +98,16 @@ const buildRandom = (seed: number) => {
 };
 
 const randomBetween = (random: () => number, min: number, max: number) => min + random() * (max - min);
+const shortestWrappedDelta = (current: number, previous: number, span: number) => {
+  let delta = current - previous;
+  const halfSpan = span / 2;
+  if (delta > halfSpan) {
+    delta -= span;
+  } else if (delta < -halfSpan) {
+    delta += span;
+  }
+  return delta;
+};
 
 const resolveBackground = (background: PortalPongConfig['background'], random: () => number) => {
   if (background !== 'random') {
@@ -425,8 +433,6 @@ class Player {
   jumpsUsed: number;
   jumpHeld: boolean;
   holdJumpFrames: number;
-  holdFramesAppliedThisJump: number;
-  firstJumpWasLong: boolean;
   facing: 1 | -1;
   wobbleTime: number;
 
@@ -445,8 +451,6 @@ class Player {
     this.jumpsUsed = 0;
     this.jumpHeld = false;
     this.holdJumpFrames = 0;
-    this.holdFramesAppliedThisJump = 0;
-    this.firstJumpWasLong = false;
     this.facing = startX < 0 ? 1 : -1;
     this.wobbleTime = Math.random() * Math.PI * 2;
     this.mesh.rotation.y = this.facing === 1 ? 0 : Math.PI;
@@ -466,7 +470,6 @@ class Player {
     if (this.onGround) {
       this.coyoteFrames = 7;
       this.jumpsUsed = 0;
-      this.firstJumpWasLong = false;
     } else if (this.coyoteFrames > 0) {
       this.coyoteFrames -= 1;
     }
@@ -475,27 +478,23 @@ class Player {
       // Classic platformer jump shaping: hold to stretch arc, tap for short hop.
       const canApplyHold = this.jumpHeld && this.holdJumpFrames > 0 && this.velocity.y > 0;
       if (canApplyHold) {
-        this.velocity.y += 0.0062;
+        // Hold adds roughly one-third extra jump height per jump.
+        this.velocity.y += 0.0052;
         this.holdJumpFrames -= 1;
-        this.holdFramesAppliedThisJump += 1;
-        if (this.jumpsUsed === 1 && this.holdFramesAppliedThisJump >= 3) {
-          this.firstJumpWasLong = true;
-        }
       }
       this.velocity.y -= 0.014;
     }
 
     const canUseGroundJump = this.onGround || this.coyoteFrames > 0;
-    const canUseAirJump = this.jumpsUsed === 1 && !this.firstJumpWasLong;
+    const canUseAirJump = this.jumpsUsed < 2 && !canUseGroundJump;
     if (this.jumpBufferFrames > 0 && (canUseGroundJump || canUseAirJump)) {
       const quickJumpVelocity = 0.315;
       this.velocity.y = quickJumpVelocity;
       this.jumpBufferFrames = 0;
       this.coyoteFrames = 0;
       this.onGround = false;
-      this.jumpsUsed += 1;
-      this.holdJumpFrames = 10;
-      this.holdFramesAppliedThisJump = 0;
+      this.jumpsUsed = canUseGroundJump ? 1 : this.jumpsUsed + 1;
+      this.holdJumpFrames = 9;
     }
 
     const nextPosition = this.mesh.position.clone().add(this.velocity);
@@ -782,7 +781,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     sizeRenderer();
 
     const texture = new THREE.TextureLoader().load(`/${selectedBackground}.png`);
-    texture.wrapS = THREE.MirroredRepeatWrapping;
+    texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.repeat.set(0.54, 0.62);
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -800,7 +799,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       }
 
       const midTexture = texture.clone();
-      midTexture.wrapS = THREE.MirroredRepeatWrapping;
+      midTexture.wrapS = THREE.RepeatWrapping;
       midTexture.wrapT = THREE.ClampToEdgeWrapping;
       midTexture.repeat.set(0.64, 0.7);
       midTexture.colorSpace = THREE.SRGBColorSpace;
@@ -816,7 +815,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       scene.add(mid);
 
       const nearTexture = texture.clone();
-      nearTexture.wrapS = THREE.MirroredRepeatWrapping;
+      nearTexture.wrapS = THREE.RepeatWrapping;
       nearTexture.wrapT = THREE.ClampToEdgeWrapping;
       nearTexture.repeat.set(0.78, 0.82);
       nearTexture.colorSpace = THREE.SRGBColorSpace;
@@ -889,6 +888,13 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     let networkPollBusy = false;
     let lastNetworkSendAt = 0;
     let lastNetworkPollAt = 0;
+    const horizontalWrapSpan = 20;
+    let parallaxFocusX = (player1.mesh.position.x + player2.mesh.position.x + ball.mesh.position.x * 2) / 4;
+    let parallaxPhaseX = 0;
+    let parallaxSmoothX = 0;
+    let lastBallY = ball.mesh.position.y;
+    let parallaxPhaseY = 0;
+    let parallaxSmoothY = 0;
 
     const generatePlatforms = () => {
       const platforms: Platform[] = [];
@@ -937,42 +943,45 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       const portalColor = x < 0 ? 0xff4a4a : 0x4a7dff;
       const group = new THREE.Group();
       group.position.set(x, 2.5, 0.05);
+      group.rotation.y = x < 0 ? Math.PI / 2 : -Math.PI / 2;
 
       const ring = new THREE.Mesh(
         new THREE.TorusGeometry(0.9, 0.12, 16, 48),
-        new THREE.MeshPhongMaterial({
+        new THREE.MeshBasicMaterial({
           color: portalColor,
-          emissive: portalColor,
-          emissiveIntensity: 0.7,
           transparent: true,
-          opacity: 0.8
+          opacity: 0.7,
+          blending: THREE.AdditiveBlending
         })
       );
+      ring.scale.set(1, 1.2, 1);
       group.add(ring);
 
       const rim = new THREE.Mesh(
         new THREE.TorusGeometry(0.93, 0.05, 12, 48),
-        new THREE.MeshPhongMaterial({
+        new THREE.MeshBasicMaterial({
           color: 0xffffff,
-          emissive: portalColor,
-          emissiveIntensity: 0.5,
           transparent: true,
-          opacity: 0.55
+          opacity: 0.45,
+          blending: THREE.AdditiveBlending
         })
       );
+      rim.scale.set(1, 1.2, 1);
       group.add(rim);
 
-      const core = new THREE.Mesh(
-        new THREE.CircleGeometry(0.78, 48),
+      const inner = new THREE.Mesh(
+        new THREE.RingGeometry(0.42, 0.76, 64, 1),
         new THREE.MeshBasicMaterial({
           color: portalColor,
           transparent: true,
-          opacity: 0.22,
+          opacity: 0.28,
           blending: THREE.AdditiveBlending,
           side: THREE.DoubleSide
         })
       );
-      group.add(core);
+      inner.rotation.z = randomBetween(random, 0, Math.PI * 2);
+      inner.scale.set(1, 1.18, 1);
+      group.add(inner);
 
       const glow = new THREE.Sprite(
         new THREE.SpriteMaterial({
@@ -984,7 +993,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
           depthWrite: false
         })
       );
-      glow.scale.set(2.1, 2.1, 1);
+      glow.scale.set(2.3, 2.7, 1);
       glow.position.set(0, 0, -0.03);
       group.add(glow);
 
@@ -998,37 +1007,18 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
           depthWrite: false
         })
       );
-      fog.scale.set(3.2, 2.6, 1);
+      fog.scale.set(3.3, 3.6, 1);
       fog.position.set(0, -0.12, -0.08);
       group.add(fog);
-
-      const beam = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.38, 0.7, 2.1, 24, 1, true),
-        new THREE.MeshBasicMaterial({
-          color: portalColor,
-          transparent: true,
-          opacity: 0.14,
-          side: THREE.DoubleSide,
-          blending: THREE.AdditiveBlending
-        })
-      );
-      beam.position.set(0, 0, -0.2);
-      group.add(beam);
-
-      const light = new THREE.PointLight(portalColor, 0.9, 7.5, 1.8);
-      light.position.set(0, 0, 1.1);
-      group.add(light);
 
       scene.add(group);
       return {
         group,
         ring,
         rim,
-        core,
+        inner,
         glow,
         fog,
-        beam,
-        light,
         pulseOffset: random() * Math.PI * 2
       };
     };
@@ -1355,19 +1345,30 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       }
 
       if (mergedConfig.parallax) {
-        const trackedX = (player1.mesh.position.x + player2.mesh.position.x + ball.mesh.position.x) / 3;
-        parallaxLayers.far.material.map!.offset.x = trackedX * 0.0045;
-        parallaxLayers.far.material.map!.offset.y = ball.mesh.position.y * 0.0008;
+        // Movement-relative parallax prevents wrap-around snapbacks.
+        const focusX = (activePlayer.mesh.position.x * 0.22) + (controlledByAi.mesh.position.x * 0.18) + (ball.mesh.position.x * 0.6);
+        const deltaFocusX = shortestWrappedDelta(focusX, parallaxFocusX, horizontalWrapSpan);
+        parallaxFocusX = focusX;
+        parallaxPhaseX += deltaFocusX;
+        parallaxSmoothX = THREE.MathUtils.lerp(parallaxSmoothX, parallaxPhaseX, 0.12);
+
+        const deltaBallY = ball.mesh.position.y - lastBallY;
+        lastBallY = ball.mesh.position.y;
+        parallaxPhaseY += deltaBallY;
+        parallaxSmoothY = THREE.MathUtils.lerp(parallaxSmoothY, parallaxPhaseY, 0.08);
+
+        parallaxLayers.far.material.map!.offset.x = parallaxSmoothX * 0.0044;
+        parallaxLayers.far.material.map!.offset.y = parallaxSmoothY * 0.001;
         if (parallaxLayers.mid?.material.map) {
-          parallaxLayers.mid.material.map.offset.x = trackedX * 0.0068;
-          parallaxLayers.mid.material.map.offset.y = ball.mesh.position.y * 0.0012;
+          parallaxLayers.mid.material.map.offset.x = parallaxSmoothX * 0.0062;
+          parallaxLayers.mid.material.map.offset.y = parallaxSmoothY * 0.0015;
         }
         if (parallaxLayers.near?.material.map) {
-          parallaxLayers.near.material.map.offset.x = trackedX * 0.0092;
-          parallaxLayers.near.material.map.offset.y = ball.mesh.position.y * 0.0018;
+          parallaxLayers.near.material.map.offset.x = parallaxSmoothX * 0.0085;
+          parallaxLayers.near.material.map.offset.y = parallaxSmoothY * 0.0021;
         }
         if (parallaxLayers.edgeFog) {
-          parallaxLayers.edgeFog.position.x = trackedX * 0.012;
+          parallaxLayers.edgeFog.position.x = parallaxSmoothX * 0.01;
         }
       }
 
@@ -1378,16 +1379,14 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       portals.forEach((portal, idx) => {
         const pulse = 0.5 + 0.5 * Math.sin(time * 3.2 + portal.pulseOffset);
         const slowPulse = 0.5 + 0.5 * Math.sin(time * 1.35 + portal.pulseOffset + idx);
-        portal.group.rotation.z = Math.sin(time * 0.65 + portal.pulseOffset) * 0.05;
-        portal.ring.rotation.z -= 0.01;
-        portal.rim.rotation.z += 0.014;
-        portal.core.material.opacity = 0.16 + pulse * 0.24;
-        portal.glow.material.opacity = 0.18 + pulse * 0.25;
-        portal.fog.material.opacity = 0.08 + slowPulse * 0.13;
-        portal.glow.scale.setScalar(1.9 + pulse * 0.45);
-        portal.fog.scale.set(2.9 + slowPulse * 0.5, 2.4 + slowPulse * 0.35, 1);
-        portal.beam.material.opacity = 0.08 + pulse * 0.12;
-        portal.light.intensity = 0.6 + pulse * 0.8;
+        portal.ring.rotation.z += 0.006;
+        portal.rim.rotation.z -= 0.01;
+        portal.inner.rotation.z += 0.014;
+        portal.inner.material.opacity = 0.14 + pulse * 0.24;
+        portal.glow.material.opacity = 0.2 + pulse * 0.22;
+        portal.fog.material.opacity = 0.06 + slowPulse * 0.12;
+        portal.glow.scale.set(2.2 + pulse * 0.35, 2.6 + pulse * 0.42, 1);
+        portal.fog.scale.set(3.2 + slowPulse * 0.35, 3.5 + slowPulse * 0.42, 1);
       });
 
       if (mobileControlsEnabled) {
@@ -1584,12 +1583,10 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         portal.ring.material.dispose();
         portal.rim.geometry.dispose();
         portal.rim.material.dispose();
-        portal.core.geometry.dispose();
-        portal.core.material.dispose();
+        portal.inner.geometry.dispose();
+        portal.inner.material.dispose();
         portal.glow.material.dispose();
         portal.fog.material.dispose();
-        portal.beam.geometry.dispose();
-        portal.beam.material.dispose();
       });
       portalFogTexture.dispose();
       texture.dispose();
