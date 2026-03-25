@@ -16,6 +16,8 @@ export interface PortalPongConfig {
   parallax: boolean;
   seed: number;
   localPlayer?: 'player1' | 'player2';
+  mode?: 'ai' | 'matchmaking';
+  matchmakingRoom?: string;
 }
 
 interface PortalPongGameProps {
@@ -35,6 +37,16 @@ interface ParallaxLayers {
   edgeFog?: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
 }
 
+interface ControllerFrame {
+  left: boolean;
+  right: boolean;
+  down: boolean;
+  jumpQueued: boolean;
+  castQueued: boolean;
+  aimX: number;
+  aimY: number;
+}
+
 const BG_IDS: Array<Exclude<PortalPongConfig['background'], 'random'>> = [
   'bg1',
   'bg2',
@@ -52,6 +64,7 @@ const PRESET_TO_PAIRS: Record<PortalPongConfigPreset, number> = {
 };
 
 const WIN_SCORE = 7;
+const REMOTE_STALE_MS = 1600;
 
 const buildRandom = (seed: number) => {
   let t = seed >>> 0;
@@ -207,9 +220,11 @@ class Spell {
 class Ball {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
+  radius: number;
 
   constructor(scene: THREE.Scene) {
-    const geometry = new THREE.SphereGeometry(0.3);
+    this.radius = 0.3;
+    const geometry = new THREE.SphereGeometry(this.radius);
     const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
     this.mesh = new THREE.Mesh(geometry, material);
     this.velocity = new THREE.Vector3(
@@ -273,8 +288,18 @@ class Ball {
     if (this.mesh.position.x > 10) this.mesh.position.x = -10;
     if (this.mesh.position.x < -10) this.mesh.position.x = 10;
 
-    if (this.mesh.position.y > gameHeight || this.mesh.position.y < 0) {
-      this.velocity.y *= -1;
+    if (this.mesh.position.y > gameHeight - this.radius) {
+      this.mesh.position.y = gameHeight - this.radius;
+      this.velocity.y = -Math.abs(this.velocity.y);
+    }
+
+    // Hard clamp + bounce so the ball cannot sink and jitter in the floor.
+    if (this.mesh.position.y < this.radius) {
+      this.mesh.position.y = this.radius;
+      this.velocity.y = Math.abs(this.velocity.y);
+      if (this.velocity.y < 0.09) {
+        this.velocity.y = 0.09;
+      }
     }
 
     const speed = this.velocity.length();
@@ -291,6 +316,10 @@ class Ball {
 
   applyImpulse(impulse: THREE.Vector3) {
     this.velocity.add(impulse);
+    const speed = this.velocity.length();
+    if (speed < 0.12) {
+      this.velocity.normalize().multiplyScalar(0.12);
+    }
   }
 
   reset() {
@@ -536,6 +565,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
   const mountRef = React.useRef<HTMLDivElement>(null);
   const [matchSeedBump, setMatchSeedBump] = React.useState(0);
   const [chosenBackground, setChosenBackground] = React.useState<Exclude<PortalPongConfig['background'], 'random'> | null>(null);
+  const [connectionStatus, setConnectionStatus] = React.useState('Offline AI');
   const [gameState, setGameState] = React.useState<GameState>({
     player1Score: 0,
     player2Score: 0,
@@ -548,8 +578,10 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     preset: config?.preset ?? 'normal',
     parallax: config?.parallax ?? true,
     seed: (config?.seed ?? 42) + matchSeedBump,
-    localPlayer: config?.localPlayer ?? 'player1'
-  }), [config?.background, config?.localPlayer, config?.parallax, config?.preset, config?.seed, matchSeedBump]);
+    localPlayer: config?.localPlayer ?? 'player1',
+    mode: config?.mode ?? 'ai',
+    matchmakingRoom: config?.matchmakingRoom ?? ''
+  }), [config?.background, config?.localPlayer, config?.matchmakingRoom, config?.mode, config?.parallax, config?.preset, config?.seed, matchSeedBump]);
 
   React.useEffect(() => {
     if (!mountRef.current) return;
@@ -595,7 +627,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     const texture = new THREE.TextureLoader().load(`/${selectedBackground}.png`);
     texture.wrapS = THREE.MirroredRepeatWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.repeat.set(1.15, 1.05);
+    texture.repeat.set(0.78, 0.86);
     texture.colorSpace = THREE.SRGBColorSpace;
 
     const setupParallax = (bounds: Bounds): ParallaxLayers => {
@@ -613,7 +645,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       const midTexture = texture.clone();
       midTexture.wrapS = THREE.MirroredRepeatWrapping;
       midTexture.wrapT = THREE.ClampToEdgeWrapping;
-      midTexture.repeat.set(1.45, 1.2);
+      midTexture.repeat.set(0.92, 0.92);
       midTexture.colorSpace = THREE.SRGBColorSpace;
       const mid = new THREE.Mesh(
         new THREE.PlaneGeometry(bounds.width * 2.0, bounds.height * 1.95),
@@ -629,7 +661,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       const nearTexture = texture.clone();
       nearTexture.wrapS = THREE.MirroredRepeatWrapping;
       nearTexture.wrapT = THREE.ClampToEdgeWrapping;
-      nearTexture.repeat.set(1.7, 1.2);
+      nearTexture.repeat.set(1.08, 1.0);
       nearTexture.colorSpace = THREE.SRGBColorSpace;
       const near = new THREE.Mesh(
         new THREE.PlaneGeometry(bounds.width * 2.2, bounds.height * 2.05),
@@ -681,10 +713,19 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
 
     const player1 = new Player(scene, 0xff0000, -5, 'player1');
     const player2 = new Player(scene, 0x4a90e2, 5, 'player2');
-    const activePlayer = mergedConfig.localPlayer === 'player2' ? player2 : player1;
+    const localRole = mergedConfig.localPlayer === 'player2' ? 'player2' : 'player1';
+    const activePlayer = localRole === 'player2' ? player2 : player1;
+    const controlledByAi = localRole === 'player1' ? player2 : player1;
     const ball = new Ball(scene);
     let activeSpells: Spell[] = [];
     let matchEnded = false;
+    let remoteLastSeenAt = 0;
+    let lastConnectionLabel = '';
+    let publishCounter = 0;
+    let remoteJumpSeq = 0;
+    let remoteCastSeq = 0;
+    let aiCastCooldown = 0;
+    let matchmakingChannel: BroadcastChannel | null = null;
 
     const generatePlatforms = () => {
       const platforms: Platform[] = [];
@@ -740,10 +781,23 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     directionalLight.position.set(0, 10, 0);
     scene.add(directionalLight);
 
-    const keys = {
+    const localInput: ControllerFrame = {
       left: false,
       right: false,
-      down: false
+      down: false,
+      jumpQueued: false,
+      castQueued: false,
+      aimX: activePlayer.mesh.position.x + (localRole === 'player1' ? 2 : -2),
+      aimY: activePlayer.mesh.position.y + 0.4
+    };
+    const remoteInput: ControllerFrame = {
+      left: false,
+      right: false,
+      down: false,
+      jumpQueued: false,
+      castQueued: false,
+      aimX: controlledByAi.mesh.position.x + (localRole === 'player1' ? -2 : 2),
+      aimY: controlledByAi.mesh.position.y + 0.4
     };
 
     const mouse = new THREE.Vector2();
@@ -759,27 +813,29 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       const hit = raycaster.ray.intersectPlane(aimPlane, worldAimPoint);
       if (hit) {
         activePlayer.setAimDirection(worldAimPoint);
+        localInput.aimX = worldAimPoint.x;
+        localInput.aimY = worldAimPoint.y;
       }
       return hit;
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       switch(e.key) {
-        case 'a': keys.left = true; break;
-        case 'd': keys.right = true; break;
+        case 'a': localInput.left = true; break;
+        case 'd': localInput.right = true; break;
         case 'w':
         case ' ':
-          activePlayer.queueJump();
+          localInput.jumpQueued = true;
           break;
-        case 's': keys.down = true; break;
+        case 's': localInput.down = true; break;
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       switch(e.key) {
-        case 'a': keys.left = false; break;
-        case 'd': keys.right = false; break;
-        case 's': keys.down = false; break;
+        case 'a': localInput.left = false; break;
+        case 'd': localInput.right = false; break;
+        case 's': localInput.down = false; break;
       }
     };
 
@@ -789,16 +845,46 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
 
     const handlePointerDown = (e: PointerEvent) => {
       syncAimFromPointer(e);
-      const spell = activePlayer.castSpell(scene);
-      if (spell) {
-        activeSpells.push(spell);
-      }
+      localInput.castQueued = true;
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
+
+    if (mergedConfig.mode === 'matchmaking' && mergedConfig.matchmakingRoom) {
+      matchmakingChannel = new BroadcastChannel(`portalpong-room-${mergedConfig.matchmakingRoom}`);
+      matchmakingChannel.onmessage = (event: MessageEvent) => {
+        const payload = event.data as {
+          type: 'control';
+          from: 'player1' | 'player2';
+          input: ControllerFrame;
+          jumpSeq: number;
+          castSeq: number;
+          sentAt: number;
+        };
+
+        if (!payload || payload.type !== 'control' || payload.from === localRole) {
+          return;
+        }
+
+        remoteLastSeenAt = performance.now();
+        remoteInput.left = payload.input.left;
+        remoteInput.right = payload.input.right;
+        remoteInput.down = payload.input.down;
+        remoteInput.aimX = payload.input.aimX;
+        remoteInput.aimY = payload.input.aimY;
+        if (payload.jumpSeq > remoteJumpSeq) {
+          remoteInput.jumpQueued = true;
+          remoteJumpSeq = payload.jumpSeq;
+        }
+        if (payload.castSeq > remoteCastSeq) {
+          remoteInput.castQueued = true;
+          remoteCastSeq = payload.castSeq;
+        }
+      };
+    }
 
     const pushBallByExplosion = (spell: Spell) => {
       if (!spell.explosionMesh || spell.ballImpulseApplied) {
@@ -808,16 +894,76 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       if (distance >= spell.explosionRadius) {
         return;
       }
-      const rawDirection = new THREE.Vector3()
-        .subVectors(ball.mesh.position, spell.explosionMesh.position)
-        .normalize();
+      const rawDirection = new THREE.Vector3().subVectors(ball.mesh.position, spell.explosionMesh.position);
+      if (rawDirection.lengthSq() < 0.0001) {
+        rawDirection.set(spell.owner === 'player1' ? 1 : -1, 0.3, 0);
+      } else {
+        rawDirection.normalize();
+      }
       const centeredness = 1 - (distance / spell.explosionRadius);
-      const impulseStrength = 0.08 + centeredness * 0.2;
+      const impulseStrength = 0.12 + centeredness * 0.28;
       if (centeredness > 0.92) {
         rawDirection.set(spell.owner === 'player1' ? 1 : -1, 0.05, 0);
       }
+      // Always give some lift so grounded hits arc away instead of dragging.
+      rawDirection.y = Math.max(rawDirection.y, 0.22);
+      rawDirection.normalize();
       ball.applyImpulse(rawDirection.multiplyScalar(impulseStrength));
+      // Ensure immediate floor release if blast happens while grounded.
+      if (ball.mesh.position.y <= ball.radius + 0.01) {
+        ball.mesh.position.y = ball.radius + 0.02;
+        ball.velocity.y = Math.max(ball.velocity.y, 0.2);
+      }
       spell.ballImpulseApplied = true;
+    };
+
+    let localJumpSeq = 0;
+    let localCastSeq = 0;
+
+    const applyControllerToPlayer = (player: Player, frame: ControllerFrame) => {
+      player.pressingDown = frame.down;
+      if (frame.left) {
+        player.moveLeft();
+      }
+      if (frame.right) {
+        player.moveRight();
+      }
+      if (frame.jumpQueued) {
+        player.queueJump();
+        frame.jumpQueued = false;
+      }
+      player.setAimDirection(new THREE.Vector3(frame.aimX, frame.aimY, 0));
+      if (frame.castQueued) {
+        const spell = player.castSpell(scene);
+        if (spell) {
+          activeSpells.push(spell);
+        }
+        frame.castQueued = false;
+      }
+    };
+
+    const updateAiController = (aiPlayer: Player, frame: ControllerFrame) => {
+      const targetX = ball.mesh.position.x + ball.velocity.x * 6;
+      const deltaX = targetX - aiPlayer.mesh.position.x;
+      frame.left = deltaX < -0.25;
+      frame.right = deltaX > 0.25;
+      frame.down = false;
+      frame.aimX = ball.mesh.position.x;
+      frame.aimY = ball.mesh.position.y + 0.15;
+
+      const shouldJump = aiPlayer.onGround && ball.mesh.position.y > aiPlayer.mesh.position.y + 0.5 && Math.abs(deltaX) < 2.7;
+      if (shouldJump) {
+        frame.jumpQueued = true;
+      }
+
+      if (aiCastCooldown > 0) {
+        aiCastCooldown -= 1;
+      }
+      const castDistance = aiPlayer.mesh.position.distanceTo(ball.mesh.position);
+      if (aiCastCooldown === 0 && castDistance < 5.5) {
+        frame.castQueued = true;
+        aiCastCooldown = 28 + Math.floor(random() * 26);
+      }
     };
 
     const animate = () => {
@@ -848,9 +994,53 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       leftWall.updateBounds(time);
       rightWall.updateBounds(time + Math.PI);
 
-      activePlayer.pressingDown = keys.down;
-      if (keys.left) activePlayer.moveLeft();
-      if (keys.right) activePlayer.moveRight();
+      if (localInput.jumpQueued) {
+        localJumpSeq += 1;
+      }
+      if (localInput.castQueued) {
+        localCastSeq += 1;
+      }
+
+      applyControllerToPlayer(activePlayer, localInput);
+
+      const nowMs = performance.now();
+      const remoteConnected = mergedConfig.mode === 'matchmaking' && nowMs - remoteLastSeenAt < REMOTE_STALE_MS;
+      if (mergedConfig.mode === 'matchmaking') {
+        if (publishCounter % 2 === 0) {
+          matchmakingChannel?.postMessage({
+            type: 'control',
+            from: localRole,
+            input: {
+              left: localInput.left,
+              right: localInput.right,
+              down: localInput.down,
+              jumpQueued: false,
+              castQueued: false,
+              aimX: localInput.aimX,
+              aimY: localInput.aimY
+            },
+            jumpSeq: localJumpSeq,
+            castSeq: localCastSeq,
+            sentAt: nowMs
+          });
+        }
+        publishCounter += 1;
+      }
+
+      if (mergedConfig.mode === 'matchmaking' && remoteConnected) {
+        applyControllerToPlayer(controlledByAi, remoteInput);
+      } else {
+        updateAiController(controlledByAi, remoteInput);
+        applyControllerToPlayer(controlledByAi, remoteInput);
+      }
+
+      const nextStatus = mergedConfig.mode === 'matchmaking'
+        ? (remoteConnected ? `Online Match ${mergedConfig.matchmakingRoom || ''}` : `Waiting In ${mergedConfig.matchmakingRoom || ''} + AI`)
+        : 'Offline AI';
+      if (nextStatus !== lastConnectionLabel) {
+        lastConnectionLabel = nextStatus;
+        setConnectionStatus(nextStatus);
+      }
 
       player1.update(platforms);
       player2.update(platforms);
@@ -916,6 +1106,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
+      matchmakingChannel?.close();
       texture.dispose();
       parallaxLayers.far.material.dispose();
       parallaxLayers.far.geometry.dispose();
@@ -946,6 +1137,9 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         <div>Blue Score: {gameState.player2Score}</div>
         <div className="text-xs mt-2 text-slate-300">Win Score: {WIN_SCORE}</div>
         <div className="text-xs text-slate-300">Background: {chosenBackground ?? 'loading'}</div>
+        <div className="text-xs text-slate-300">Mode: {mergedConfig.mode === 'matchmaking' ? 'Matchmaking' : 'Vs AI'}</div>
+        <div className="text-xs text-slate-300">Local Side: {mergedConfig.localPlayer ?? 'player1'}</div>
+        <div className="text-xs text-slate-300">{connectionStatus}</div>
       </div>
       <div className="absolute top-4 right-4 flex gap-2">
         <button
