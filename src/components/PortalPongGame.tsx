@@ -49,6 +49,14 @@ interface ControllerFrame {
   aimY: number;
 }
 
+interface MobileStickState {
+  active: boolean;
+  x: number;
+  y: number;
+  jumpLatch?: boolean;
+  fireQueued?: boolean;
+}
+
 const BG_IDS: Array<Exclude<PortalPongConfig['background'], 'random'>> = [
   'bg1',
   'bg2',
@@ -634,9 +642,16 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
   const mountRef = React.useRef<HTMLDivElement>(null);
   const resumeFromPauseRef = React.useRef<() => void>(() => {});
   const exitMatchRef = React.useRef<() => void>(() => {});
+  const leftJoystickRef = React.useRef<HTMLDivElement>(null);
+  const rightJoystickRef = React.useRef<HTMLDivElement>(null);
+  const moveStickRef = React.useRef<MobileStickState>({ active: false, x: 0, y: 0, jumpLatch: false });
+  const aimStickRef = React.useRef<MobileStickState>({ active: false, x: 0, y: 0, fireQueued: false });
   const [matchSeedBump, setMatchSeedBump] = React.useState(0);
   const [chosenBackground, setChosenBackground] = React.useState<Exclude<PortalPongConfig['background'], 'random'> | null>(null);
   const [connectionStatus, setConnectionStatus] = React.useState('Offline AI');
+  const [mobileControlsEnabled, setMobileControlsEnabled] = React.useState(false);
+  const [moveStickUi, setMoveStickUi] = React.useState({ active: false, x: 0, y: 0 });
+  const [aimStickUi, setAimStickUi] = React.useState({ active: false, x: 0, y: 0 });
   const [pauseMenuOpen, setPauseMenuOpen] = React.useState(false);
   const [resumeCountdown, setResumeCountdown] = React.useState<number | null>(null);
   const [gameState, setGameState] = React.useState<GameState>({
@@ -656,6 +671,60 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     mode: config?.mode ?? 'ai',
     matchmakingRoom: config?.matchmakingRoom ?? ''
   }), [config?.aiDifficulty, config?.background, config?.localPlayer, config?.matchmakingRoom, config?.mode, config?.parallax, config?.preset, config?.seed, matchSeedBump]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    setMobileControlsEnabled(window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
+  }, []);
+
+  const updateStickFromPointer = (
+    e: React.PointerEvent<HTMLDivElement>,
+    padRef: React.RefObject<HTMLDivElement>,
+    stickRef: React.MutableRefObject<MobileStickState>,
+    setUi: React.Dispatch<React.SetStateAction<{ active: boolean; x: number; y: number }>>
+  ) => {
+    const pad = padRef.current;
+    if (!pad) {
+      return;
+    }
+    const rect = pad.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    let dx = e.clientX - centerX;
+    let dy = e.clientY - centerY;
+    const maxRadius = Math.min(rect.width, rect.height) * 0.36;
+    const magnitude = Math.hypot(dx, dy);
+    if (magnitude > maxRadius) {
+      const scale = maxRadius / magnitude;
+      dx *= scale;
+      dy *= scale;
+    }
+    const normalizedX = THREE.MathUtils.clamp(dx / maxRadius, -1, 1);
+    const normalizedY = THREE.MathUtils.clamp(dy / maxRadius, -1, 1);
+    stickRef.current.active = true;
+    stickRef.current.x = normalizedX;
+    stickRef.current.y = normalizedY;
+    setUi({ active: true, x: dx, y: dy });
+  };
+
+  const resetStick = (
+    stickRef: React.MutableRefObject<MobileStickState>,
+    setUi: React.Dispatch<React.SetStateAction<{ active: boolean; x: number; y: number }>>,
+    queueFire = false
+  ) => {
+    if (queueFire) {
+      const magnitude = Math.hypot(stickRef.current.x, stickRef.current.y);
+      if (magnitude > 0.35) {
+        stickRef.current.fireQueued = true;
+      }
+    }
+    stickRef.current.active = false;
+    stickRef.current.x = 0;
+    stickRef.current.y = 0;
+    setUi({ active: false, x: 0, y: 0 });
+  };
 
   React.useEffect(() => {
     if (!mountRef.current) return;
@@ -891,6 +960,11 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       localInput.jumpHeld = false;
       localInput.jumpQueued = false;
       localInput.castQueued = false;
+      moveStickRef.current.jumpLatch = false;
+      moveStickRef.current.fireQueued = false;
+      aimStickRef.current.fireQueued = false;
+      resetStick(moveStickRef, setMoveStickUi);
+      resetStick(aimStickRef, setAimStickUi);
     };
 
     const beginPause = () => {
@@ -1186,6 +1260,32 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       leftWall.updateBounds(time);
       rightWall.updateBounds(time + Math.PI);
 
+      if (mobileControlsEnabled) {
+        const moveStick = moveStickRef.current;
+        const aimStick = aimStickRef.current;
+        localInput.left = moveStick.x < -0.24;
+        localInput.right = moveStick.x > 0.24;
+        localInput.down = moveStick.y > 0.5;
+
+        const jumpIntent = moveStick.active && moveStick.y < -0.55;
+        if (jumpIntent && !moveStick.jumpLatch) {
+          localInput.jumpQueued = true;
+          moveStick.jumpLatch = true;
+        } else if (!jumpIntent) {
+          moveStick.jumpLatch = false;
+        }
+        localInput.jumpHeld = jumpIntent;
+
+        if (aimStick.active) {
+          localInput.aimX = activePlayer.mesh.position.x + aimStick.x * 4.8;
+          localInput.aimY = activePlayer.mesh.position.y + aimStick.y * 3.2;
+        }
+        if (aimStick.fireQueued) {
+          localInput.castQueued = true;
+          aimStick.fireQueued = false;
+        }
+      }
+
       if (localInput.jumpQueued) {
         localJumpSeq += 1;
       }
@@ -1367,7 +1467,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
       }
       renderer.dispose();
     };
-  }, [mergedConfig, onExit]);
+  }, [mergedConfig, onExit, mobileControlsEnabled]);
 
   return (
     <div className="w-full h-screen">
@@ -1385,6 +1485,64 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         <div className="text-xs text-slate-300">Local Side: {mergedConfig.localPlayer ?? 'player1'}</div>
         <div className="text-xs text-slate-300">{connectionStatus}</div>
       </div>
+      {mobileControlsEnabled && gameState.gameStatus !== 'ended' && !pauseMenuOpen && resumeCountdown === null ? (
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute left-5 bottom-6 pointer-events-auto">
+            <div className="text-[10px] text-white/70 uppercase tracking-wide mb-2">Move</div>
+            <div
+              ref={leftJoystickRef}
+              className="relative h-28 w-28 rounded-full border border-white/30 bg-slate-900/35 backdrop-blur-sm"
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                updateStickFromPointer(e, leftJoystickRef, moveStickRef, setMoveStickUi);
+              }}
+              onPointerMove={(e) => {
+                if (!moveStickRef.current.active) {
+                  return;
+                }
+                updateStickFromPointer(e, leftJoystickRef, moveStickRef, setMoveStickUi);
+              }}
+              onPointerUp={(e) => {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                resetStick(moveStickRef, setMoveStickUi);
+              }}
+              onPointerCancel={() => resetStick(moveStickRef, setMoveStickUi)}
+            >
+              <div
+                className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-100/60 bg-cyan-200/25 backdrop-blur-sm"
+                style={{ transform: `translate(calc(-50% + ${moveStickUi.x}px), calc(-50% + ${moveStickUi.y}px))` }}
+              />
+            </div>
+          </div>
+          <div className="absolute right-5 bottom-6 pointer-events-auto">
+            <div className="text-[10px] text-white/70 uppercase tracking-wide mb-2 text-right">Aim / Cast</div>
+            <div
+              ref={rightJoystickRef}
+              className="relative h-28 w-28 rounded-full border border-white/30 bg-slate-900/35 backdrop-blur-sm"
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                updateStickFromPointer(e, rightJoystickRef, aimStickRef, setAimStickUi);
+              }}
+              onPointerMove={(e) => {
+                if (!aimStickRef.current.active) {
+                  return;
+                }
+                updateStickFromPointer(e, rightJoystickRef, aimStickRef, setAimStickUi);
+              }}
+              onPointerUp={(e) => {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                resetStick(aimStickRef, setAimStickUi, true);
+              }}
+              onPointerCancel={() => resetStick(aimStickRef, setAimStickUi)}
+            >
+              <div
+                className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full border border-yellow-100/60 bg-yellow-200/25 backdrop-blur-sm"
+                style={{ transform: `translate(calc(-50% + ${aimStickUi.x}px), calc(-50% + ${aimStickUi.y}px))` }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
       {pauseMenuOpen ? (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-950/45 backdrop-blur-sm">
           <div className="w-[min(92vw,30rem)] border border-cyan-100/35 bg-slate-900/35 backdrop-blur-md p-6 text-center text-white shadow-[0_0_30px_rgba(34,211,238,0.2)]">
