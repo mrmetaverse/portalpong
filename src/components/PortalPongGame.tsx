@@ -205,9 +205,11 @@ class Spell {
   tailMeshes: THREE.Mesh[];
   tailPoints: THREE.Vector3[];
   fizzleParticles: Array<{ mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }>;
+  trailParticles: Array<{ mesh: THREE.Mesh; velocity: THREE.Vector3; life: number; maxLife: number }>;
   scene: THREE.Scene;
   explosionScale: number;
   homingTargets: Array<{ position: THREE.Vector3 }> | null;
+  spellColor: number;
 
   constructor(
     scene: THREE.Scene,
@@ -215,13 +217,16 @@ class Spell {
     direction: THREE.Vector3,
     target: THREE.Vector3,
     owner: 'player1' | 'player2',
-    explosionScale = 1
+    explosionScale = 1,
+    spellColor = 0xb388ff
   ) {
-    const geometry = new THREE.SphereGeometry(0.1);
-    const material = new THREE.MeshBasicMaterial({ 
-      color: 0xb388ff,
+    this.spellColor = spellColor;
+    const headCol = new THREE.Color(spellColor);
+    const geometry = new THREE.SphereGeometry(0.12, 12, 12);
+    const material = new THREE.MeshBasicMaterial({
+      color: headCol,
       transparent: true,
-      opacity: 0.9
+      opacity: 1.0
     });
     this.mesh = new THREE.Mesh(geometry, material);
     
@@ -249,16 +254,20 @@ class Spell {
     this.tailMeshes = [];
     this.tailPoints = [];
     this.fizzleParticles = [];
+    this.trailParticles = [];
     this.scene = scene;
     scene.add(this.mesh);
 
-    for (let i = 0; i < 6; i += 1) {
+    // 12 tail segments for a longer snake body
+    const tailCol = headCol.clone().lerp(new THREE.Color(0xffffff), 0.25);
+    for (let i = 0; i < 12; i += 1) {
+      const r = 0.09 - i * 0.006;
       const tail = new THREE.Mesh(
-        new THREE.SphereGeometry(0.06 - i * 0.006, 10, 10),
+        new THREE.SphereGeometry(Math.max(0.015, r), 8, 8),
         new THREE.MeshBasicMaterial({
-          color: 0xc8a2ff,
+          color: tailCol.clone().lerp(new THREE.Color(0x000000), i * 0.04),
           transparent: true,
-          opacity: 0.42 - i * 0.05,
+          opacity: 0.72 - i * 0.052,
           blending: THREE.AdditiveBlending,
           depthWrite: false
         })
@@ -335,18 +344,62 @@ class Spell {
       this.tailPoints.length = this.tailMeshes.length;
     }
 
+    // Perpendicular axis for snake wiggle
     const velocity2d = new THREE.Vector3(-this.velocity.y, this.velocity.x, 0);
-    if (velocity2d.lengthSq() > 0.0001) {
-      velocity2d.normalize();
-    }
+    if (velocity2d.lengthSq() > 0.0001) velocity2d.normalize();
+
     this.tailMeshes.forEach((tail, idx) => {
       const point = this.tailPoints[Math.min(idx, this.tailPoints.length - 1)];
-      const wiggleAmp = Math.max(0.01, 0.08 - idx * 0.011);
-      const wigglePhase = this.age * 0.42 - idx * 0.8;
+      // Bigger, snappier snake wave: amplitude fades toward tail tip
+      const wiggleAmp = Math.max(0.005, 0.28 - idx * 0.022);
+      const wigglePhase = this.age * 0.65 - idx * 0.55;
       const wiggle = Math.sin(wigglePhase) * wiggleAmp;
       tail.position.copy(point).addScaledVector(velocity2d, wiggle);
       const mat = tail.material as THREE.MeshBasicMaterial;
-      mat.opacity = Math.max(0.05, 0.36 - idx * 0.045);
+      mat.opacity = Math.max(0.03, 0.65 - idx * 0.052);
+    });
+
+    // Spawn 2 tiny trail particles each frame
+    for (let p = 0; p < 2; p++) {
+      const lastIdx = Math.min(this.tailPoints.length - 1, 5 + p * 2);
+      const origin = this.tailPoints[lastIdx] ?? this.mesh.position;
+      const pGeo = new THREE.SphereGeometry(0.025 + Math.random() * 0.02, 5, 5);
+      const brightCol = new THREE.Color(this.spellColor).lerp(new THREE.Color(0xffffff), 0.3 + Math.random() * 0.4);
+      const pMat = new THREE.MeshBasicMaterial({
+        color: brightCol,
+        transparent: true,
+        opacity: 0.7 + Math.random() * 0.3,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const pMesh = new THREE.Mesh(pGeo, pMat);
+      pMesh.position.copy(origin).add(
+        new THREE.Vector3((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.08)
+      );
+      const maxLife = 10 + Math.floor(Math.random() * 8);
+      this.trailParticles.push({
+        mesh: pMesh,
+        velocity: new THREE.Vector3((Math.random() - 0.5) * 0.018, (Math.random() - 0.5) * 0.018 + 0.006, 0),
+        life: maxLife,
+        maxLife
+      });
+      this.scene.add(pMesh);
+    }
+
+    // Update trail particles
+    this.trailParticles = this.trailParticles.filter(tp => {
+      tp.life--;
+      if (tp.life <= 0) {
+        this.scene.remove(tp.mesh);
+        (tp.mesh.material as THREE.MeshBasicMaterial).dispose();
+        tp.mesh.geometry.dispose();
+        return false;
+      }
+      tp.mesh.position.add(tp.velocity);
+      tp.velocity.y -= 0.0005;
+      const mat = tp.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = (tp.life / tp.maxLife) * 0.75;
+      return true;
     });
 
     const toTarget = this.target.clone().sub(this.mesh.position);
@@ -395,9 +448,9 @@ class Spell {
         uOpacity: { value: 0.75 },
         uProgress: { value: 0.04 },
         uSeed: { value: this.age * 0.137 + (this.owner === 'player1' ? 1.13 : 2.31) },
-        uColorCore: { value: new THREE.Color(0xcdb4ff) },
-        uColorArc: { value: new THREE.Color(0x9c6bff) },
-        uColorHot: { value: new THREE.Color(0xf3ecff) }
+        uColorCore: { value: new THREE.Color(this.spellColor).lerp(new THREE.Color(0xffffff), 0.45) },
+        uColorArc: { value: new THREE.Color(this.spellColor).multiplyScalar(0.9) },
+        uColorHot: { value: new THREE.Color(this.spellColor).lerp(new THREE.Color(0xffffff), 0.75) }
       },
       vertexShader: `
         varying vec3 vLocalPos;
@@ -463,10 +516,11 @@ class Spell {
     this.scene.add(this.explosionMesh);
     this.fizzleParticles = [];
     for (let i = 0; i < 11; i += 1) {
+      const fCol = new THREE.Color(this.spellColor).lerp(new THREE.Color(0xffffff), i % 3 === 0 ? 0.7 : 0.3);
       const particle = new THREE.Mesh(
         new THREE.SphereGeometry(randomBetween(Math.random, 0.03, 0.055), 8, 8),
         new THREE.MeshBasicMaterial({
-          color: i % 3 === 0 ? 0xf3ecff : 0xc49bff,
+          color: fCol,
           transparent: true,
           opacity: 0.85,
           blending: THREE.AdditiveBlending,
@@ -491,6 +545,13 @@ class Spell {
       mat.opacity = 0;
       tail.visible = false;
     });
+    // Kill trail particles on explode
+    this.trailParticles.forEach(tp => {
+      this.scene.remove(tp.mesh);
+      (tp.mesh.material as THREE.MeshBasicMaterial).dispose();
+      tp.mesh.geometry.dispose();
+    });
+    this.trailParticles = [];
   }
 
   cleanup() {
@@ -523,6 +584,12 @@ class Spell {
       }
     });
     this.fizzleParticles = [];
+    this.trailParticles.forEach(tp => {
+      this.scene.remove(tp.mesh);
+      (tp.mesh.material as THREE.MeshBasicMaterial).dispose();
+      tp.mesh.geometry.dispose();
+    });
+    this.trailParticles = [];
     if (this.explosionMesh) {
       this.scene.remove(this.explosionMesh);
       this.explosionMesh.geometry.dispose();
@@ -1014,7 +1081,7 @@ class Player {
   castSpell(scene: THREE.Scene, target: THREE.Vector3) {
     if (this.spellCooldown > 0) return null;
     this.spellCooldown = 16;
-    return new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id);
+    return new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, 1, this.baseColor);
   }
 
   castSpells(scene: THREE.Scene, target: THREE.Vector3, homingTargets?: Array<{ position: THREE.Vector3 }>): Spell[] {
@@ -1031,12 +1098,12 @@ class Player {
         const newX = dir.x * Math.cos(rad) - dir.y * Math.sin(rad);
         const newY = dir.x * Math.sin(rad) + dir.y * Math.cos(rad);
         dir.x = newX; dir.y = newY; dir.normalize();
-        const s = new Spell(scene, this.mesh.position, dir, target, this.id, explosionScale);
+        const s = new Spell(scene, this.mesh.position, dir, target, this.id, explosionScale, this.baseColor);
         if (homing && homingTargets) s.homingTargets = homingTargets;
         return s;
       });
     }
-    const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale);
+    const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale, this.baseColor);
     if (homing && homingTargets) s.homingTargets = homingTargets;
     return [s];
   }
