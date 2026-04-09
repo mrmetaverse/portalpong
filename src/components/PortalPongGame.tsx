@@ -242,6 +242,8 @@ class Spell {
   explosionScale: number;
   homingTargets: Array<{ position: THREE.Vector3 }> | null;
   spellColor: number;
+  chainCount: number;
+  pendingChains: Array<{ delay: number; offset: THREE.Vector3 }>;
 
   constructor(
     scene: THREE.Scene,
@@ -280,6 +282,8 @@ class Spell {
     this.explosionTotalFrames = 52;
     this.explosionFramesLeft = this.explosionTotalFrames;
     this.homingTargets = null;
+    this.chainCount = 0;
+    this.pendingChains = [];
     this.owner = owner;
     this.ballImpulseApplied = false;
     this.nudgedPlayers = new Set();
@@ -584,6 +588,41 @@ class Spell {
       tp.mesh.geometry.dispose();
     });
     this.trailParticles = [];
+
+    if (this.chainCount > 0) {
+      for (let i = 0; i < this.chainCount; i++) {
+        this.pendingChains.push({
+          delay: 8 + i * 10 + Math.floor(Math.random() * 6),
+          offset: new THREE.Vector3(
+            (Math.random() - 0.5) * 3.2,
+            (Math.random() - 0.3) * 2.0,
+            0
+          ),
+        });
+      }
+      this.chainCount = 0;
+    }
+  }
+
+  tickChains(): Spell[] {
+    const spawned: Spell[] = [];
+    this.pendingChains = this.pendingChains.filter(chain => {
+      chain.delay--;
+      if (chain.delay > 0) return true;
+      const pos = (this.explosionMesh ?? this.mesh).position.clone().add(chain.offset);
+      pos.y = Math.max(pos.y, 0.3);
+      const child = new Spell(
+        this.scene, pos,
+        new THREE.Vector3(0, 1, 0), pos,
+        this.owner, this.explosionScale, this.spellColor
+      );
+      child.lifetime = 1;
+      child.age = 0;
+      if (this.homingTargets) child.homingTargets = this.homingTargets;
+      spawned.push(child);
+      return false;
+    });
+    return spawned;
   }
 
   cleanup() {
@@ -1250,16 +1289,10 @@ class Player {
     const homing = this.hasPowerup('homingShots');
 
     if (this.hasPowerup('tripleBlast')) {
-      return [-5, 0, 5].map(deg => {
-        const rad = (deg * Math.PI) / 180;
-        const dir = this.direction.clone();
-        const newX = dir.x * Math.cos(rad) - dir.y * Math.sin(rad);
-        const newY = dir.x * Math.sin(rad) + dir.y * Math.cos(rad);
-        dir.x = newX; dir.y = newY; dir.normalize();
-        const s = new Spell(scene, this.mesh.position, dir, target, this.id, explosionScale, this.baseColor);
-        if (homing && homingTargets) s.homingTargets = homingTargets;
-        return s;
-      });
+      const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale, this.baseColor);
+      s.chainCount = 2;
+      if (homing && homingTargets) s.homingTargets = homingTargets;
+      return [s];
     }
     const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale, this.baseColor);
     if (homing && homingTargets) s.homingTargets = homingTargets;
@@ -3084,6 +3117,14 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       ball.update(gameHeight, worldHalfWidth, platforms);
 
       activeSpells = activeSpells.filter((spell) => !spell.update(platforms, ball, worldHalfWidth));
+
+      const chainSpawns: Spell[] = [];
+      activeSpells.forEach(spell => {
+        if (spell.exploded && spell.pendingChains.length > 0) {
+          chainSpawns.push(...spell.tickChains());
+        }
+      });
+      chainSpawns.forEach(s => activeSpells.push(s));
 
       // Spells can directly hit players and cause strong knockback.
       activeSpells.forEach((spell) => {
