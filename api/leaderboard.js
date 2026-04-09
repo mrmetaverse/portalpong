@@ -1,5 +1,15 @@
 const { Redis } = require("@upstash/redis");
-const redis = new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
+
+let redis;
+function getRedis() {
+  if (!redis) {
+    redis = new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
+  }
+  return redis;
+}
 
 const TOP_N = 10;
 
@@ -8,11 +18,9 @@ const parseEntry = (entry) => {
   return { id, name: name || "Player" };
 };
 
-const fetchTop = async (key) => {
-  // zrevrangebyscore with scores, top N
-  const raw = await redis.zrange(key, 0, TOP_N - 1, { rev: true, withScores: true });
+const fetchTop = async (db, key) => {
+  const raw = await db.zrange(key, 0, TOP_N - 1, { rev: true, withScores: true });
   if (!raw || raw.length === 0) return [];
-  // raw is interleaved [member, score, member, score, ...]
   const results = [];
   for (let i = 0; i < raw.length; i += 2) {
     const member = raw[i];
@@ -26,17 +34,28 @@ const fetchTop = async (key) => {
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
-  const [winsAll, goalsAll, winsPvp, goalsPvp] = await Promise.all([
-    fetchTop("pp:lb:wins"),
-    fetchTop("pp:lb:goals"),
-    fetchTop("pp:lb:pvpwins"),
-    fetchTop("pp:lb:pvpgoals")
-  ]);
+  try {
+    const db = getRedis();
 
-  return res.status(200).json({
-    ok: true,
-    leaderboards: { winsAll, goalsAll, winsPvp, goalsPvp }
-  });
+    const [winsAll, goalsAll, winsPvp, goalsPvp] = await Promise.all([
+      fetchTop(db, "pp:lb:wins"),
+      fetchTop(db, "pp:lb:goals"),
+      fetchTop(db, "pp:lb:pvpwins"),
+      fetchTop(db, "pp:lb:pvpgoals")
+    ]);
+
+    return res.status(200).json({
+      ok: true,
+      leaderboards: { winsAll, goalsAll, winsPvp, goalsPvp }
+    });
+  } catch (err) {
+    console.error("leaderboard API error:", err);
+    return res.status(500).json({ ok: false, error: String(err.message || err) });
+  }
 };

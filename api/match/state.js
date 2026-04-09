@@ -1,47 +1,42 @@
 const { Redis } = require("@upstash/redis");
 
-const redis = new Redis({
-  url: process.env.KV_REST_API_URL,
-  token: process.env.KV_REST_API_TOKEN
-});
+let redis;
+function getRedis() {
+  if (!redis) {
+    redis = new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
+  }
+  return redis;
+}
 
 const parsePlayerFrame = (raw) => {
-  if (!raw || typeof raw !== "string") {
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (_error) {
-    return null;
-  }
+  if (!raw || typeof raw !== "string") return null;
+  try { return JSON.parse(raw); } catch { return null; }
 };
 
 module.exports = async function handler(req, res) {
-  if (req.method !== "GET") {
-    res.status(405).json({ ok: false, error: "Method not allowed" });
-    return;
-  }
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
   const room = String(req.query.room || "").trim().toUpperCase();
-  if (!room) {
-    res.status(400).json({ ok: false, error: "Missing room code" });
-    return;
-  }
+  if (!room) return res.status(400).json({ ok: false, error: "Missing room code" });
 
   try {
+    const db = getRedis();
     const key = `portalpong:room:${room}`;
-    const data = await redis.hgetall(key);
+    const data = await db.hgetall(key);
     const player1 = parsePlayerFrame(data?.player1);
     const player2 = parsePlayerFrame(data?.player2);
 
-    res.status(200).json({
-      ok: true,
-      room,
-      serverTime: Date.now(),
-      player1,
-      player2
-    });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: "Failed to fetch room state" });
+    return res.status(200).json({ ok: true, room, serverTime: Date.now(), player1, player2 });
+  } catch (err) {
+    console.error("match/state API error:", err);
+    return res.status(500).json({ ok: false, error: String(err.message || err) });
   }
 };
