@@ -33,11 +33,23 @@ export interface PortalPongConfig {
   localPlayer?: 'player1' | 'player2';
   mode?: 'ai' | 'matchmaking';
   matchmakingRoom?: string;
+  player1Id?: string;
+  player2Id?: string;
+}
+
+export interface MatchResult {
+  winner: 1 | 2 | null;
+  p1Score: number;
+  p2Score: number;
+  isVsAi: boolean;
+  player1Id: string;
+  player2Id: string;
 }
 
 interface PortalPongGameProps {
   config?: PortalPongConfig;
   onExit?: () => void;
+  onMatchEnd?: (result: MatchResult) => void;
 }
 
 interface Bounds {
@@ -1465,7 +1477,7 @@ const PowerupBadge: React.FC<{ type: PowerupType; framesLeft: number }> = ({ typ
   );
 };
 
-const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
+const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatchEnd }) => {
   const mountRef = React.useRef<HTMLDivElement>(null);
   const resumeFromPauseRef = React.useRef<() => void>(() => {});
   const exitMatchRef = React.useRef<() => void>(() => {});
@@ -2845,6 +2857,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
           setRoundCountdownText(null);
           setGoalCelebrationActive(false);
           setGameState((prev) => ({ ...prev, player2Score: player2ScoreLocal, gameStatus: 'ended', winner: 'blue' }));
+          onMatchEnd?.({ winner: 2, p1Score: player1ScoreLocal, p2Score: player2ScoreLocal, isVsAi: mergedConfig.mode !== 'matchmaking', player1Id: mergedConfig.player1Id || '', player2Id: mergedConfig.player2Id || '' });
         } else {
           setGameState((prev) => ({ ...prev, player2Score: player2ScoreLocal }));
           beginGoalCelebration();
@@ -2859,6 +2872,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
           setRoundCountdownText(null);
           setGoalCelebrationActive(false);
           setGameState((prev) => ({ ...prev, player1Score: player1ScoreLocal, gameStatus: 'ended', winner: 'red' }));
+          onMatchEnd?.({ winner: 1, p1Score: player1ScoreLocal, p2Score: player2ScoreLocal, isVsAi: mergedConfig.mode !== 'matchmaking', player1Id: mergedConfig.player1Id || '', player2Id: mergedConfig.player2Id || '' });
         } else {
           setGameState((prev) => ({ ...prev, player1Score: player1ScoreLocal }));
           beginGoalCelebration();
