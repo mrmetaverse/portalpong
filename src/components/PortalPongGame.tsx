@@ -1739,13 +1739,19 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
 
     const randTilt = (maxDeg: number) => randomBetween(random, -maxDeg, maxDeg) * (Math.PI / 180);
 
+    // Any platform whose Y overlaps this window must stay clear of the portal mouth
+    const PORTAL_Y_MIN = 1.0;
+    const PORTAL_Y_MAX = 3.8;
+    // Keep platform edges at least this far (world units) from the portal center
+    const PORTAL_CLEAR_DIST = 2.4;
+
     const generatePlatforms = () => {
       const platforms: Platform[] = [];
       const pairCount = PRESET_TO_PAIRS[mergedConfig.preset] + 2;
       const minY = 1.35;
       const maxY = Math.max(minY + 0.6, Math.min(gameHeight - 1.4, 6.8));
-      
-      // Center platform: small tilt
+
+      // Center platform: small tilt, keep center-ish so it never touches portals
       platforms.push(new Platform(scene, 0, randomBetween(random, 2.3, 3.8), randomBetween(random, 1.9, 2.9), randTilt(8)));
 
       for (let i = 0; i < pairCount; i++) {
@@ -1753,11 +1759,16 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         const maxWidth = THREE.MathUtils.clamp(worldHalfWidth * 0.28, 2.0, 3.4);
         const width = randomBetween(random, 1.6, maxWidth);
         const minX = 2.3 + laneT * 0.35;
-        const maxX = Math.max(minX + 0.25, worldHalfWidth - width / 2 - 1.0);
-        const x = randomBetween(random, minX, maxX);
         const laneY = minY + laneT * (maxY - minY);
         const y = THREE.MathUtils.clamp(laneY + randomBetween(random, -0.55, 0.65), minY, maxY);
-        // Paired platforms: symmetric tilt (one slopes left, mirror slopes right)
+
+        // If this Y is in the portal mouth zone, the outer edge must not reach the portal
+        const inPortalZone = y + 0.3 > PORTAL_Y_MIN && y - 0.3 < PORTAL_Y_MAX;
+        const portalSafeEdge = inPortalZone ? goalCenterX - PORTAL_CLEAR_DIST : worldHalfWidth;
+        // maxX is the platform CENTER; right edge = x + width/2 must stay ≤ portalSafeEdge
+        const maxX = Math.max(minX + 0.25, Math.min(worldHalfWidth - width / 2 - 1.0, portalSafeEdge - width / 2));
+
+        const x = randomBetween(random, minX, maxX);
         const tilt = randTilt(12);
         platforms.push(new Platform(scene, x, y, width, tilt));
         platforms.push(new Platform(scene, -x, y, width, -tilt));
