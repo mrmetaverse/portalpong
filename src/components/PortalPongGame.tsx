@@ -1385,6 +1385,85 @@ class PowerupPickup {
   }
 }
 
+// ─── Powerup icon characters ─────────────────────────────────────────────────
+const POWERUP_ICON: Record<PowerupType, string> = {
+  tripleJump:  '3↑',
+  permaFlight: '∞',
+  tripleBlast: '3✦',
+  reflector:   '◈',
+  teleport:    '⬡',
+  doubleSize:  '2×',
+  quarterSize: '¼',
+  homingShots: '⊙'
+};
+
+const PowerupBadge: React.FC<{ type: PowerupType; framesLeft: number }> = ({ type, framesLeft }) => {
+  const colorHex = POWERUP_COLORS[type];
+  const colorCss = `#${colorHex.toString(16).padStart(6, '0')}`;
+  const r = 22;
+  const pad = 5;
+  const sz = (r + pad) * 2;
+  const cx = r + pad;
+  const cy = r + pad;
+  const circ = 2 * Math.PI * r;
+  const progress = Math.max(0, framesLeft / POWERUP_DURATION);
+  const dash = progress * circ;
+  const isLow = progress < 0.2;
+  return (
+    <div
+      className="relative flex items-center justify-center"
+      style={{ width: sz, height: sz, opacity: isLow ? undefined : 1 }}
+    >
+      {/* Pulsing low-time glow */}
+      {isLow && (
+        <div
+          className="absolute inset-0 rounded-full animate-ping"
+          style={{ backgroundColor: `${colorCss}22`, animationDuration: '0.9s' }}
+        />
+      )}
+      <svg width={sz} height={sz} style={{ position: 'absolute', inset: 0 }}>
+        {/* Track */}
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
+        {/* Depleting ring */}
+        <circle
+          cx={cx} cy={cy} r={r}
+          fill="none"
+          stroke={colorCss}
+          strokeWidth="3.5"
+          strokeDasharray={`${dash} ${circ}`}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${cx} ${cy})`}
+          style={{ filter: `drop-shadow(0 0 5px ${colorCss})`, transition: 'stroke-dasharray 0.1s linear' }}
+        />
+      </svg>
+      {/* Icon */}
+      <div
+        className="rounded-full flex items-center justify-center font-black select-none leading-none"
+        style={{
+          width: r * 2 - 4,
+          height: r * 2 - 4,
+          fontSize: '11px',
+          color: colorCss,
+          backgroundColor: `${colorCss}1a`,
+          border: `1px solid ${colorCss}50`,
+          backdropFilter: 'blur(6px)',
+          textShadow: `0 0 8px ${colorCss}`,
+          boxShadow: `inset 0 0 10px ${colorCss}30`,
+        }}
+      >
+        {POWERUP_ICON[type]}
+      </div>
+      {/* Tooltip label on hover */}
+      <div
+        className="absolute -top-7 left-1/2 -translate-x-1/2 text-[9px] font-bold whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded"
+        style={{ color: colorCss, backgroundColor: 'rgba(0,0,0,0.7)' }}
+      >
+        {POWERUP_LABELS[type]}
+      </div>
+    </div>
+  );
+};
+
 const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
   const mountRef = React.useRef<HTMLDivElement>(null);
   const resumeFromPauseRef = React.useRef<() => void>(() => {});
@@ -1405,8 +1484,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
   const [resumeCountdown, setResumeCountdown] = React.useState<number | null>(null);
   const [roundCountdownText, setRoundCountdownText] = React.useState<string | null>(null);
   const [goalCelebrationActive, setGoalCelebrationActive] = React.useState(false);
-  const [p1PowerupLabel, setP1PowerupLabel] = React.useState('');
-  const [p2PowerupLabel, setP2PowerupLabel] = React.useState('');
+  const [localPowerups, setLocalPowerups] = React.useState<Partial<Record<PowerupType, number>>>({});
   const [gameState, setGameState] = React.useState<GameState>({
     player1Score: 0,
     player2Score: 0,
@@ -2766,10 +2844,14 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         return;
       }
 
-      // Update powerup HUD labels every 30 frames
-      if (Math.round(performance.now() / 16) % 30 === 0) {
-        setP1PowerupLabel(player1.activePowerupLabel);
-        setP2PowerupLabel(player2.activePowerupLabel);
+      // Update local player powerup HUD ~6× per second
+      if (Math.round(performance.now() / 16) % 10 === 0) {
+        const pups: Partial<Record<PowerupType, number>> = {};
+        for (const k of ALL_POWERUPS) {
+          const v = activePlayer.powerups[k] ?? 0;
+          if (v > 0) pups[k] = v;
+        }
+        setLocalPowerups(pups);
       }
 
       renderer.render(scene, camera);
@@ -2835,7 +2917,8 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
   return (
     <div className="w-full h-screen touch-none">
       <div ref={mountRef} className="w-full h-full touch-none" />
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none">
+      {/* Score HUD */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none">
         <div className="bg-slate-950/30 backdrop-blur-sm text-white px-4 py-2 rounded-md border border-white/20 shadow-[0_0_16px_rgba(15,23,42,0.3)]">
           <div className="flex items-center gap-3 text-3xl font-black leading-none">
             <span style={{ color: hexToCss(leftTeamColor.hex), textShadow: `0 0 10px ${hexToCss(leftTeamColor.hex)}AA` }}>{gameState.player1Score}</span>
@@ -2843,23 +2926,18 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
             <span style={{ color: hexToCss(rightTeamColor.hex), textShadow: `0 0 10px ${hexToCss(rightTeamColor.hex)}AA` }}>{gameState.player2Score}</span>
           </div>
         </div>
-        {(p1PowerupLabel || p2PowerupLabel) && (
-          <div className="flex gap-2 text-[11px] font-bold tracking-wide">
-            {p1PowerupLabel && (
-              <span className="px-2 py-0.5 rounded-full bg-slate-950/50 backdrop-blur-sm border border-white/20"
-                style={{ color: hexToCss(leftTeamColor.hex), textShadow: `0 0 8px ${hexToCss(leftTeamColor.hex)}` }}>
-                {p1PowerupLabel}
-              </span>
-            )}
-            {p2PowerupLabel && (
-              <span className="px-2 py-0.5 rounded-full bg-slate-950/50 backdrop-blur-sm border border-white/20"
-                style={{ color: hexToCss(rightTeamColor.hex), textShadow: `0 0 8px ${hexToCss(rightTeamColor.hex)}` }}>
-                {p2PowerupLabel}
-              </span>
-            )}
-          </div>
-        )}
       </div>
+
+      {/* Local player powerup rings — only visible to the local player */}
+      {gameState.gameStatus === 'playing' && !pauseMenuOpen && (
+        <div
+          className={`absolute left-1/2 -translate-x-1/2 flex gap-1.5 items-center pointer-events-none ${mobileControlsEnabled ? 'bottom-40' : 'bottom-4'}`}
+        >
+          {ALL_POWERUPS.filter(t => (localPowerups[t] ?? 0) > 0).map(type => (
+            <PowerupBadge key={type} type={type} framesLeft={localPowerups[type]!} />
+          ))}
+        </div>
+      )}
       {mobileControlsEnabled && gameState.gameStatus !== 'ended' && !pauseMenuOpen && resumeCountdown === null && roundCountdownText === null ? (
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute left-5 bottom-6 pointer-events-auto">
