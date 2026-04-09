@@ -2509,64 +2509,127 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
     const updateAiController = (aiPlayer: Player, frame: ControllerFrame) => {
       const aiDifficulty = mergedConfig.aiDifficulty ?? 3;
+      // linearSkill: 0 at diff=1, 1 at diff=10
       const linearSkill = THREE.MathUtils.clamp((aiDifficulty - 1) / 9, 0, 1);
-      // Steep pacing curve: difficulty 5 is ~25% of full-speed behavior, difficulty 10 is full speed.
-      const pace = Math.pow(linearSkill, 1.7);
+      // Steep S-curve: levels 1-4 feel dumb, levels 7-10 feel superhuman
+      const pace = THREE.MathUtils.smoothstep(linearSkill, 0.0, 1.0);
       const lerp = (slow: number, fast: number) => THREE.MathUtils.lerp(slow, fast, pace);
 
-      const reactionMin = Math.round(lerp(70, 16));
-      const reactionVariance = Math.round(lerp(50, 12));
-      const aimErrorXRange = lerp(4.2, 1.3);
-      const aimErrorYRange = lerp(1.7, 0.8);
-      const prediction = lerp(0.06, 0.85);
-      const lateralNoise = lerp(2.8, 1.4);
-      const deadZone = lerp(1.9, 1.1);
-      const hesitationChance = lerp(0.7, 0.26);
-      const jumpChance = lerp(0.1, 0.45);
-      const castChance = lerp(0.02, 0.12);
-      const castRange = lerp(2.1, 3.8);
-      const lineupRange = lerp(1.4, 2.9);
-      const castCooldownMin = Math.round(lerp(260, 140));
-      const castCooldownVariance = Math.round(lerp(140, 80));
+      // ── Reaction ─────────────────────────────────────────────────────────────
+      // Lv1: 3-5 sec gaps. Lv5: ~0.5 sec. Lv9: 1-2 frames (basically instant).
+      const reactionMin      = Math.round(lerp(180, 1));
+      const reactionVariance = Math.round(lerp(120, 2));
 
-      frame.jumpHeld = aiPlayer.velocity.y > 0.08 && random() < lerp(0.08, 0.35);
+      // ── Aim & prediction ──────────────────────────────────────────────────────
+      // Lv1: wildly off target. Lv10: pixel-perfect with trajectory lead.
+      const aimErrorX  = lerp(9.0,  0.05);
+      const aimErrorY  = lerp(5.0,  0.05);
+      // How many frames ahead to predict ball position (0 = react to current pos)
+      const prediction = lerp(0.0,  28.0);
+      // Random lateral noise added on top of prediction
+      const lateralNoise = lerp(6.0, 0.1);
+
+      // ── Movement ──────────────────────────────────────────────────────────────
+      // Lv1: huge dead-zone, can't be bothered. Lv10: reacts to 0.1-unit deviation.
+      const deadZone         = lerp(6.0, 0.15);
+      // Lv1: 92% chance to just stand there. Lv10: 0% hesitation.
+      const hesitationChance = lerp(0.92, 0.0);
+      // Lv1: rarely reverses randomly. Lv10: always moves deliberately.
+      const wrongDirChance   = lerp(0.35, 0.0);
+
+      // ── Jumping ───────────────────────────────────────────────────────────────
+      // Lv1: almost never jumps. Lv10: aggressively jumps to intercept ball.
+      const jumpChance    = lerp(0.01, 0.95);
+      const jumpBallDelta = lerp(3.5, 0.4); // how far above AI ball must be to trigger jump
+      // Hold jump held for soaring trajectories at high levels
+      frame.jumpHeld = aiPlayer.velocity.y > 0.05 && random() < lerp(0.02, 0.85);
+
+      // ── Casting ───────────────────────────────────────────────────────────────
+      // Lv1: almost never shoots, even from close range.
+      // Lv10: shoots constantly from anywhere, aims where ball WILL BE.
+      const castChance         = lerp(0.003, 0.55);
+      const castRange          = lerp(1.5,  20.0); // whole arena width at lv10
+      const lineupRange        = lerp(0.8,  18.0); // always "lined up" at lv10
+      const castCooldownMin    = Math.round(lerp(600, 16));
+      const castCooldownVar    = Math.round(lerp(400, 4));
+
+      // ── Shield ────────────────────────────────────────────────────────────────
+      const shieldChance = lerp(0.0, 0.55);
+      const shieldRange  = lerp(1.5, 7.0);
+
+      // ── Reaction gate: only update logic when timer fires ─────────────────────
       if (aiReactionFrames > 0) {
         aiReactionFrames -= 1;
+        // Even while "waiting", high-level AI still tracks fast enough to hold movement
+        if (pace > 0.75) {
+          const quickDelta = ball.mesh.position.x - aiPlayer.mesh.position.x;
+          frame.left  = quickDelta < -deadZone;
+          frame.right = quickDelta > deadZone;
+        }
       } else {
-        const aimErrorX = randomBetween(random, -aimErrorXRange, aimErrorXRange);
-        const aimErrorY = randomBetween(random, -aimErrorYRange, aimErrorYRange);
-        const targetX = ball.mesh.position.x + ball.velocity.x * prediction + randomBetween(random, -lateralNoise, lateralNoise);
-        const deltaX = targetX - aiPlayer.mesh.position.x;
-        frame.left = deltaX < -deadZone;
+        // Predict ball position several frames ahead
+        const predictedBallX = ball.mesh.position.x + ball.velocity.x * prediction;
+        const predictedBallY = ball.mesh.position.y + ball.velocity.y * prediction;
+
+        // Add noise to predicted target (less noise = more skill)
+        const noisyX = predictedBallX + randomBetween(random, -lateralNoise, lateralNoise);
+        const deltaX = noisyX - aiPlayer.mesh.position.x;
+
+        frame.left  = deltaX < -deadZone;
         frame.right = deltaX > deadZone;
+
+        // Random hesitation (low-level AI often just freezes)
         if (random() < hesitationChance) {
           frame.left = false;
           frame.right = false;
         }
-        frame.down = false;
-      frame.shieldHeld = random() < lerp(0.12, 0.35) && ball.mesh.position.distanceTo(aiPlayer.mesh.position) < lerp(3.4, 4.8);
-        frame.aimX = ball.mesh.position.x + aimErrorX;
-        frame.aimY = ball.mesh.position.y + 0.1 + aimErrorY;
+        // Low-level AI occasionally moves the WRONG direction
+        if (random() < wrongDirChance) {
+          const tmp = frame.left;
+          frame.left = frame.right;
+          frame.right = tmp;
+        }
 
-        const shouldJump = aiPlayer.onGround &&
-          ball.mesh.position.y > aiPlayer.mesh.position.y + 0.75 &&
-          Math.abs(deltaX) < 2.2 &&
-          random() < jumpChance;
-        if (shouldJump) {
+        frame.down = false;
+
+        // Shield logic
+        const spellIncoming = activeSpells.some(s =>
+          s.owner !== aiPlayer.id &&
+          s.mesh.position.distanceTo(aiPlayer.mesh.position) < shieldRange
+        );
+        frame.shieldHeld = spellIncoming
+          ? random() < lerp(0.05, 0.95)
+          : random() < shieldChance && ball.mesh.position.distanceTo(aiPlayer.mesh.position) < shieldRange;
+
+        // Aim (with error)
+        const errX = randomBetween(random, -aimErrorX, aimErrorX);
+        const errY = randomBetween(random, -aimErrorY, aimErrorY);
+        frame.aimX = predictedBallX + errX;
+        frame.aimY = predictedBallY + 0.1 + errY;
+
+        // Jump: lv1 only jumps if ball is way above, lv10 jumps to intercept anytime
+        const ballHighEnough = predictedBallY > aiPlayer.mesh.position.y + jumpBallDelta;
+        const horizontallyClose = Math.abs(deltaX) < lerp(6.0, 4.0);
+        if (aiPlayer.onGround && ballHighEnough && horizontallyClose && random() < jumpChance) {
+          frame.jumpQueued = true;
+        }
+        // High-level AI also jumps off platforms to intercept aerial balls
+        if (!aiPlayer.onGround && pace > 0.7 && predictedBallY > aiPlayer.mesh.position.y + 0.5 && random() < pace * 0.6) {
           frame.jumpQueued = true;
         }
 
         aiReactionFrames = reactionMin + Math.floor(random() * Math.max(1, reactionVariance));
       }
 
+      // ── Casting (runs every frame, gated by its own cooldown) ─────────────────
       if (aiCastCooldown > 0) {
         aiCastCooldown -= 1;
       }
       const castDistance = aiPlayer.mesh.position.distanceTo(ball.mesh.position);
-      const hasLineup = Math.abs(ball.mesh.position.x - aiPlayer.mesh.position.x) < lineupRange;
+      const hasLineup    = Math.abs(ball.mesh.position.x - aiPlayer.mesh.position.x) < lineupRange;
       if (aiCastCooldown === 0 && castDistance < castRange && hasLineup && random() < castChance) {
         frame.castQueued = true;
-        aiCastCooldown = castCooldownMin + Math.floor(random() * Math.max(1, castCooldownVariance));
+        aiCastCooldown = castCooldownMin + Math.floor(random() * Math.max(1, castCooldownVar));
       }
     };
 
