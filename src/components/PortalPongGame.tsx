@@ -172,18 +172,33 @@ class Platform {
   bottom: number;
   left: number;
   right: number;
+  tiltAngle: number;
+  tiltNormal: THREE.Vector3;
 
-  constructor(scene: THREE.Scene, x: number, y: number, width = 2) {
+  constructor(scene: THREE.Scene, x: number, y: number, width = 2, tiltAngle = 0) {
+    this.tiltAngle = tiltAngle;
+    // Surface normal of the top face after tilt (rotated from world-up by angle around Z)
+    this.tiltNormal = new THREE.Vector3(-Math.sin(tiltAngle), Math.cos(tiltAngle), 0).normalize();
+
     const geometry = new THREE.BoxGeometry(width, 0.16, 0.78);
     const material = new THREE.MeshPhongMaterial({ color: 0x95a5a6 });
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.position.set(x, y, 0);
+    this.mesh.rotation.z = tiltAngle;
     scene.add(this.mesh);
 
-    this.top = y + 0.08;
-    this.bottom = y - 0.08;
-    this.left = x - width/2;
-    this.right = x + width/2;
+    // Compute AABB of the rotated box so collision still works
+    const hw = width / 2;
+    const hh = 0.08;
+    const ca = Math.abs(Math.cos(tiltAngle));
+    const sa = Math.abs(Math.sin(tiltAngle));
+    const aabbHalfW = hw * ca + hh * sa;
+    const aabbHalfH = hw * sa + hh * ca;
+
+    this.top    = y + aabbHalfH;
+    this.bottom = y - aabbHalfH;
+    this.left   = x - aabbHalfW;
+    this.right  = x + aabbHalfW;
   }
 }
 
@@ -640,30 +655,34 @@ class Ball {
       const nextBallLeft = nextPosition.x - 0.3;
       const nextBallRight = nextPosition.x + 0.3;
 
+      // Tilt normal (default straight-up for walls)
+      const platNormal: THREE.Vector3 = (platform as Platform).tiltNormal ?? new THREE.Vector3(0, 1, 0);
+
       // Collision checks
       if (nextBallRight >= platform.left && nextBallLeft <= platform.right) {
         // Vertical collision
         if (nextBallBottom <= platform.top && ballBottom > platform.top) {
-          // Hitting platform from above
+          // Hitting from above — reflect off tilted surface normal
           nextPosition.y = platform.top + 0.3;
-          this.velocity.y *= -1;
+          const dot = this.velocity.dot(platNormal);
+          this.velocity.addScaledVector(platNormal, -2 * dot * 0.72);
+          // Clamp to avoid absurd speeds
+          if (this.velocity.length() > 0.38) this.velocity.setLength(0.38);
         } else if (nextBallTop >= platform.bottom && ballTop < platform.bottom) {
           // Hitting platform from below
           nextPosition.y = platform.bottom - 0.3;
-          this.velocity.y *= -1;
+          this.velocity.y = Math.abs(this.velocity.y) * 0.65;
         }
       }
 
       if (nextBallTop >= platform.bottom && nextBallBottom <= platform.top) {
         // Horizontal collision
         if (nextBallRight >= platform.left && ballRight < platform.left) {
-          // Hitting platform from left
           nextPosition.x = platform.left - 0.3;
-          this.velocity.x *= -1;
+          this.velocity.x *= -0.72;
         } else if (nextBallLeft <= platform.right && ballLeft > platform.right) {
-          // Hitting platform from right
           nextPosition.x = platform.right + 0.3;
-          this.velocity.x *= -1;
+          this.velocity.x *= -0.72;
         }
       }
     });
@@ -968,6 +987,11 @@ class Player {
           nextPosition.y = platform.top + playerRadius;
           this.velocity.y = 0;
           this.onGround = true;
+          // Gentle slope slide: push player downhill proportional to tilt
+          const tilt = (platform as Platform).tiltAngle ?? 0;
+          if (Math.abs(tilt) > 0.02) {
+            this.velocity.x += Math.sin(tilt) * 0.004;
+          }
         } else if (
           playerTop >= platform.bottom &&
           prevPosition.y + playerRadius <= platform.bottom + 0.02 &&
@@ -1119,6 +1143,8 @@ class MovingWall implements Platform {
   bottom: number = 0;
   left: number;
   right: number;
+  tiltAngle = 0;
+  tiltNormal = new THREE.Vector3(0, 1, 0);
 
   constructor(scene: THREE.Scene, x: number, baseY: number = 2) {
     const geometry = new THREE.BoxGeometry(0.4, 3.3, 0.8);
@@ -1633,13 +1659,16 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     let parallaxPhaseY = 0;
     let parallaxSmoothY = 0;
 
+    const randTilt = (maxDeg: number) => randomBetween(random, -maxDeg, maxDeg) * (Math.PI / 180);
+
     const generatePlatforms = () => {
       const platforms: Platform[] = [];
       const pairCount = PRESET_TO_PAIRS[mergedConfig.preset] + 2;
       const minY = 1.35;
       const maxY = Math.max(minY + 0.6, Math.min(gameHeight - 1.4, 6.8));
       
-      platforms.push(new Platform(scene, 0, randomBetween(random, 2.3, 3.8), randomBetween(random, 1.9, 2.9)));
+      // Center platform: small tilt
+      platforms.push(new Platform(scene, 0, randomBetween(random, 2.3, 3.8), randomBetween(random, 1.9, 2.9), randTilt(8)));
 
       for (let i = 0; i < pairCount; i++) {
         const laneT = (i + 1) / (pairCount + 1);
@@ -1650,15 +1679,17 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         const x = randomBetween(random, minX, maxX);
         const laneY = minY + laneT * (maxY - minY);
         const y = THREE.MathUtils.clamp(laneY + randomBetween(random, -0.55, 0.65), minY, maxY);
-        platforms.push(new Platform(scene, x, y, width));
-        platforms.push(new Platform(scene, -x, y, width));
+        // Paired platforms: symmetric tilt (one slopes left, mirror slopes right)
+        const tilt = randTilt(12);
+        platforms.push(new Platform(scene, x, y, width, tilt));
+        platforms.push(new Platform(scene, -x, y, width, -tilt));
       }
 
       const extraCenterCount = 1 + Math.floor(random() * 2);
       for (let i = 0; i < extraCenterCount; i += 1) {
         const y = randomBetween(random, 2.4, Math.min(maxY + 0.8, gameHeight - 1.0));
         const width = randomBetween(random, 1.4, 2.1);
-        platforms.push(new Platform(scene, randomBetween(random, -1.1, 1.1), y, width));
+        platforms.push(new Platform(scene, randomBetween(random, -1.1, 1.1), y, width, randTilt(10)));
       }
       return platforms;
     };
