@@ -219,6 +219,8 @@ class Platform {
   }
 }
 
+type ProjectileStyle = 'magic' | 'axe' | 'slash' | 'disk';
+
 class Spell {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
@@ -244,6 +246,8 @@ class Spell {
   spellColor: number;
   chainCount: number;
   pendingChains: Array<{ delay: number; offset: THREE.Vector3 }>;
+  projectileStyle: ProjectileStyle;
+  spinAxis: THREE.Vector3;
 
   constructor(
     scene: THREE.Scene,
@@ -252,16 +256,54 @@ class Spell {
     target: THREE.Vector3,
     owner: 'player1' | 'player2',
     explosionScale = 1,
-    spellColor = 0xb388ff
+    spellColor = 0xb388ff,
+    projectileStyle: ProjectileStyle = 'magic'
   ) {
     this.spellColor = spellColor;
+    this.projectileStyle = projectileStyle;
     const headCol = new THREE.Color(spellColor);
-    const geometry = new THREE.SphereGeometry(0.12, 12, 12);
-    const material = new THREE.MeshBasicMaterial({
-      color: headCol,
-      transparent: true,
-      opacity: 1.0
-    });
+
+    let geometry: THREE.BufferGeometry;
+    let material: THREE.Material;
+
+    switch (projectileStyle) {
+      case 'axe': {
+        const shape = new THREE.Shape();
+        shape.moveTo(0, 0.18);
+        shape.lineTo(-0.14, -0.09);
+        shape.lineTo(0.14, -0.09);
+        shape.closePath();
+        geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: false });
+        geometry.center();
+        material = new THREE.MeshBasicMaterial({ color: headCol, transparent: true, opacity: 1.0 });
+        break;
+      }
+      case 'slash': {
+        const slashShape = new THREE.Shape();
+        slashShape.moveTo(-0.22, 0);
+        slashShape.quadraticCurveTo(0, 0.08, 0.22, 0);
+        slashShape.quadraticCurveTo(0, -0.03, -0.22, 0);
+        geometry = new THREE.ExtrudeGeometry(slashShape, { depth: 0.015, bevelEnabled: false });
+        geometry.center();
+        material = new THREE.MeshBasicMaterial({
+          color: headCol.clone().lerp(new THREE.Color(0xffffff), 0.5),
+          transparent: true, opacity: 0.9,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        });
+        break;
+      }
+      case 'disk': {
+        geometry = new THREE.TorusGeometry(0.1, 0.03, 8, 16);
+        material = new THREE.MeshBasicMaterial({ color: headCol, transparent: true, opacity: 1.0 });
+        break;
+      }
+      default: {
+        geometry = new THREE.SphereGeometry(0.12, 12, 12);
+        material = new THREE.MeshBasicMaterial({ color: headCol, transparent: true, opacity: 1.0 });
+        break;
+      }
+    }
+
     this.mesh = new THREE.Mesh(geometry, material);
     
     const normalizedDirection = direction.clone().normalize();
@@ -273,6 +315,15 @@ class Spell {
     const toTarget = this.target.clone().sub(this.mesh.position);
     const targetDirection = toTarget.lengthSq() > 0.0001 ? toTarget.normalize() : normalizedDirection;
     this.velocity = targetDirection.multiplyScalar(0.36);
+
+    // Orient non-magic projectiles toward travel direction
+    if (projectileStyle !== 'magic') {
+      const angle = Math.atan2(this.velocity.y, this.velocity.x);
+      this.mesh.rotation.z = angle;
+    }
+
+    // Spin axis: velocity direction for axe/disk, perpendicular for slash
+    this.spinAxis = this.velocity.clone().normalize();
     
     this.lifetime = 70;
     this.age = 0;
@@ -294,23 +345,41 @@ class Spell {
     this.scene = scene;
     scene.add(this.mesh);
 
-    // 12 tail segments for a longer snake body
-    const tailCol = headCol.clone().lerp(new THREE.Color(0xffffff), 0.25);
-    for (let i = 0; i < 12; i += 1) {
-      const r = 0.09 - i * 0.006;
-      const tail = new THREE.Mesh(
-        new THREE.SphereGeometry(Math.max(0.015, r), 8, 8),
-        new THREE.MeshBasicMaterial({
-          color: tailCol.clone().lerp(new THREE.Color(0x000000), i * 0.04),
+    if (projectileStyle === 'magic') {
+      const tailCol = headCol.clone().lerp(new THREE.Color(0xffffff), 0.25);
+      for (let i = 0; i < 12; i += 1) {
+        const r = 0.09 - i * 0.006;
+        const tail = new THREE.Mesh(
+          new THREE.SphereGeometry(Math.max(0.015, r), 8, 8),
+          new THREE.MeshBasicMaterial({
+            color: tailCol.clone().lerp(new THREE.Color(0x000000), i * 0.04),
+            transparent: true,
+            opacity: 0.72 - i * 0.052,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          })
+        );
+        this.tailMeshes.push(tail);
+        this.tailPoints.push(this.mesh.position.clone());
+        scene.add(tail);
+      }
+    } else if (projectileStyle === 'slash') {
+      // Slash gets fading afterimage copies
+      const afterCol = headCol.clone().lerp(new THREE.Color(0xffffff), 0.6);
+      for (let i = 0; i < 5; i += 1) {
+        const afterGeo = new THREE.PlaneGeometry(0.3 - i * 0.03, 0.06 - i * 0.008);
+        const tail = new THREE.Mesh(afterGeo, new THREE.MeshBasicMaterial({
+          color: afterCol,
           transparent: true,
-          opacity: 0.72 - i * 0.052,
+          opacity: 0.5 - i * 0.09,
           blending: THREE.AdditiveBlending,
-          depthWrite: false
-        })
-      );
-      this.tailMeshes.push(tail);
-      this.tailPoints.push(this.mesh.position.clone());
-      scene.add(tail);
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }));
+        this.tailMeshes.push(tail);
+        this.tailPoints.push(this.mesh.position.clone());
+        scene.add(tail);
+      }
     }
   }
 
@@ -380,38 +449,81 @@ class Spell {
       this.tailPoints.length = this.tailMeshes.length;
     }
 
-    // Perpendicular axis for snake wiggle
-    const velocity2d = new THREE.Vector3(-this.velocity.y, this.velocity.x, 0);
-    if (velocity2d.lengthSq() > 0.0001) velocity2d.normalize();
+    // ── Projectile-specific spinning & trail ──────────────────────────────────
+    const style = this.projectileStyle;
 
-    this.tailMeshes.forEach((tail, idx) => {
-      const point = this.tailPoints[Math.min(idx, this.tailPoints.length - 1)];
-      // Bigger, snappier snake wave: amplitude fades toward tail tip
-      const wiggleAmp = Math.max(0.005, 0.28 - idx * 0.022);
-      const wigglePhase = this.age * 0.65 - idx * 0.55;
-      const wiggle = Math.sin(wigglePhase) * wiggleAmp;
-      tail.position.copy(point).addScaledVector(velocity2d, wiggle);
-      const mat = tail.material as THREE.MeshBasicMaterial;
-      mat.opacity = Math.max(0.03, 0.65 - idx * 0.052);
-    });
+    if (style === 'axe') {
+      // Spinning axe: tumble around the velocity axis
+      const travelAngle = Math.atan2(this.velocity.y, this.velocity.x);
+      this.mesh.rotation.z = travelAngle + this.age * 0.45;
+    } else if (style === 'disk') {
+      // Spinning disk: flat spin + wobble
+      const travelAngle = Math.atan2(this.velocity.y, this.velocity.x);
+      this.mesh.rotation.z = travelAngle;
+      this.mesh.rotation.x = this.age * 0.5;
+      this.mesh.rotation.y = this.age * 0.35;
+    } else if (style === 'slash') {
+      // Wind slash: slight oscillation, faces travel direction
+      const travelAngle = Math.atan2(this.velocity.y, this.velocity.x);
+      this.mesh.rotation.z = travelAngle + Math.sin(this.age * 0.3) * 0.15;
+      this.mesh.scale.setScalar(1.0 + Math.sin(this.age * 0.4) * 0.1);
+    }
 
-    // Spawn 2 tiny trail particles each frame
-    for (let p = 0; p < 2; p++) {
-      const lastIdx = Math.min(this.tailPoints.length - 1, 5 + p * 2);
-      const origin = this.tailPoints[lastIdx] ?? this.mesh.position;
-      const pGeo = new THREE.SphereGeometry(0.025 + Math.random() * 0.02, 5, 5);
+    // Magic style: snake-wiggle tail
+    if (style === 'magic') {
+      const velocity2d = new THREE.Vector3(-this.velocity.y, this.velocity.x, 0);
+      if (velocity2d.lengthSq() > 0.0001) velocity2d.normalize();
+
+      this.tailMeshes.forEach((tail, idx) => {
+        const point = this.tailPoints[Math.min(idx, this.tailPoints.length - 1)];
+        const wiggleAmp = Math.max(0.005, 0.28 - idx * 0.022);
+        const wigglePhase = this.age * 0.65 - idx * 0.55;
+        const wiggle = Math.sin(wigglePhase) * wiggleAmp;
+        tail.position.copy(point).addScaledVector(velocity2d, wiggle);
+        const mat = tail.material as THREE.MeshBasicMaterial;
+        mat.opacity = Math.max(0.03, 0.65 - idx * 0.052);
+      });
+    } else if (style === 'slash') {
+      // Afterimage trail for slash
+      this.tailMeshes.forEach((tail, idx) => {
+        const point = this.tailPoints[Math.min(idx, this.tailPoints.length - 1)];
+        tail.position.copy(point);
+        tail.rotation.z = this.mesh.rotation.z;
+        const mat = tail.material as THREE.MeshBasicMaterial;
+        mat.opacity = Math.max(0.02, (0.4 - idx * 0.08) * (0.6 + Math.sin(this.age * 0.5) * 0.4));
+      });
+    }
+
+    // Trail particles for all styles (different shapes per style)
+    const trailCount = style === 'magic' ? 2 : 1;
+    for (let p = 0; p < trailCount; p++) {
+      const origin = style === 'magic'
+        ? (this.tailPoints[Math.min(this.tailPoints.length - 1, 5 + p * 2)] ?? this.mesh.position)
+        : this.mesh.position;
+      let pGeo: THREE.BufferGeometry;
+      if (style === 'axe') {
+        pGeo = new THREE.TetrahedronGeometry(0.025 + Math.random() * 0.02, 0);
+      } else if (style === 'slash') {
+        pGeo = new THREE.PlaneGeometry(0.04 + Math.random() * 0.03, 0.01);
+      } else if (style === 'disk') {
+        pGeo = new THREE.RingGeometry(0.01, 0.025 + Math.random() * 0.015, 6);
+      } else {
+        pGeo = new THREE.SphereGeometry(0.025 + Math.random() * 0.02, 5, 5);
+      }
       const brightCol = new THREE.Color(this.spellColor).lerp(new THREE.Color(0xffffff), 0.3 + Math.random() * 0.4);
       const pMat = new THREE.MeshBasicMaterial({
         color: brightCol,
         transparent: true,
         opacity: 0.7 + Math.random() * 0.3,
         blending: THREE.AdditiveBlending,
-        depthWrite: false
+        depthWrite: false,
+        side: THREE.DoubleSide,
       });
       const pMesh = new THREE.Mesh(pGeo, pMat);
       pMesh.position.copy(origin).add(
         new THREE.Vector3((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.08)
       );
+      if (style !== 'magic') pMesh.rotation.z = Math.random() * Math.PI * 2;
       const maxLife = 10 + Math.floor(Math.random() * 8);
       this.trailParticles.push({
         mesh: pMesh,
@@ -422,17 +534,17 @@ class Spell {
       this.scene.add(pMesh);
     }
 
-    // Update trail particles
     this.trailParticles = this.trailParticles.filter(tp => {
       tp.life--;
       if (tp.life <= 0) {
         this.scene.remove(tp.mesh);
-        (tp.mesh.material as THREE.MeshBasicMaterial).dispose();
+        (tp.mesh.material as THREE.Material).dispose();
         tp.mesh.geometry.dispose();
         return false;
       }
       tp.mesh.position.add(tp.velocity);
       tp.velocity.y -= 0.0005;
+      if (style === 'axe' || style === 'disk') tp.mesh.rotation.z += 0.15;
       const mat = tp.mesh.material as THREE.MeshBasicMaterial;
       mat.opacity = (tp.life / tp.maxLife) * 0.75;
       return true;
@@ -1275,10 +1387,19 @@ class Player {
     this.direction.y = THREE.MathUtils.clamp(this.direction.y, -0.4, 0.75);
   }
 
+  get projectileStyle(): ProjectileStyle {
+    switch (this.characterType) {
+      case 'berserker': return 'axe';
+      case 'knight':    return 'slash';
+      case 'rogue':     return 'disk';
+      default:          return 'magic';
+    }
+  }
+
   castSpell(scene: THREE.Scene, target: THREE.Vector3) {
     if (this.spellCooldown > 0) return null;
     this.spellCooldown = 16;
-    return new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, 1, this.baseColor);
+    return new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, 1, this.baseColor, this.projectileStyle);
   }
 
   castSpells(scene: THREE.Scene, target: THREE.Vector3, homingTargets?: Array<{ position: THREE.Vector3 }>): Spell[] {
@@ -1287,14 +1408,15 @@ class Player {
 
     const explosionScale = (this.hasPowerup('doubleSize') ? 2 : 1) * this.statPower;
     const homing = this.hasPowerup('homingShots');
+    const pStyle = this.projectileStyle;
 
     if (this.hasPowerup('tripleBlast')) {
-      const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale, this.baseColor);
+      const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale, this.baseColor, pStyle);
       s.chainCount = 2;
       if (homing && homingTargets) s.homingTargets = homingTargets;
       return [s];
     }
-    const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale, this.baseColor);
+    const s = new Spell(scene, this.mesh.position, this.direction.clone(), target, this.id, explosionScale, this.baseColor, pStyle);
     if (homing && homingTargets) s.homingTargets = homingTargets;
     return [s];
   }
