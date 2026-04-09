@@ -846,6 +846,12 @@ class Player {
   squashY: number;
   /** Was on ground last frame (for landing detection) */
   wasOnGround: boolean;
+  /** Animation mixer for rigged characters */
+  mixer: THREE.AnimationMixer | null;
+  /** Named animation actions keyed by state name */
+  animActions: Record<string, THREE.AnimationAction>;
+  /** Currently playing animation state name */
+  currentAnimState: string;
   /** Multipliers from chosen character (default 1.0 for wizard) */
   statSpeed: number;
   statJump: number;
@@ -902,6 +908,9 @@ class Player {
     this.bobTime = Math.random() * Math.PI * 2;
     this.squashY = 1;
     this.wasOnGround = true;
+    this.mixer = null;
+    this.animActions = {};
+    this.currentAnimState = 'idle';
     this.mesh.rotation.y = this.facing === 1 ? 0 : Math.PI;
 
     this.shieldMesh = new THREE.Mesh(
@@ -1104,15 +1113,10 @@ class Player {
     if (this.glbModel) {
       // ── GLB model procedural animation ─────────────────────────────────────
       this.bobTime += 0.045 + horizontalSpeed * 0.3;
-      const bob = Math.sin(this.bobTime) * 0.04;
 
       // Lean in direction of movement
       const lean = THREE.MathUtils.clamp(-this.velocity.x * 5, -0.35, 0.35);
       this.glbModel.rotation.z = THREE.MathUtils.lerp(this.glbModel.rotation.z, lean, 0.18);
-
-      // Bob (only on ground)
-      const targetBobY = this.onGround ? bob : 0;
-      this.glbModel.position.y = THREE.MathUtils.lerp(this.glbModel.position.y, targetBobY, 0.2);
 
       // Squash/stretch on the model group itself
       this.glbModel.scale.y = THREE.MathUtils.lerp(this.glbModel.scale.y, finalScaleY, 0.25);
@@ -1121,6 +1125,35 @@ class Player {
       // Facing direction
       const targetFacingY = this.facing === 1 ? 0 : Math.PI;
       this.glbModel.rotation.y = THREE.MathUtils.lerp(this.glbModel.rotation.y, targetFacingY, 0.25);
+
+      // ── Animation state machine ────────────────────────────────────────────
+      if (this.mixer) {
+        // Determine desired animation state
+        let desiredState = 'idle';
+        if (!this.onGround && this.velocity.y > 0.05) {
+          desiredState = 'jump';
+        } else if (this.spellCooldown > Math.round(16 * this.statCooldown) - 4) {
+          desiredState = 'cast';
+        } else if (horizontalSpeed > 0.015) {
+          desiredState = horizontalSpeed > 0.045 ? 'run' : 'walk';
+        }
+
+        if (desiredState !== this.currentAnimState && this.animActions[desiredState]) {
+          const fadeTime = desiredState === 'jump' || desiredState === 'cast' ? 0.1 : 0.2;
+          const prev = this.animActions[this.currentAnimState];
+          const next = this.animActions[desiredState];
+          if (prev) prev.fadeOut(fadeTime);
+          next.reset().fadeIn(fadeTime).play();
+          this.currentAnimState = desiredState;
+        }
+
+        this.mixer.update(1 / 60);
+      } else {
+        // No mixer (rig failed) — keep procedural bob
+        const bob = Math.sin(this.bobTime) * 0.04;
+        const targetBobY = this.onGround ? bob : 0;
+        this.glbModel.position.y = THREE.MathUtils.lerp(this.glbModel.position.y, targetBobY, 0.2);
+      }
     } else {
       // ── Procedural wizard avatar animation ─────────────────────────────────
       this.wobbleTime += 0.08 + horizontalSpeed * 0.6;
@@ -1836,69 +1869,138 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
     const player2 = new Player(scene, player2Theme.hex, playerSpawnX, 'player2', p2Char, p1Char);
 
     // Async: swap wizard avatar for loaded GLB character model (non-blocking)
+    /** Apply toon-shaded theme coloring to every mesh in a loaded model */
+    const colorizeModel = (model: THREE.Object3D, charDef: typeof CHARACTERS['wizard'], baseColor: number) => {
+      const themeColor  = new THREE.Color(charDef.themeColor);
+      const accentColor = new THREE.Color(charDef.accentColor);
+      let meshIdx = 0;
+      model.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          const col = meshIdx % 3 === 2 ? accentColor : themeColor;
+          meshIdx++;
+          const tinted = col.clone().lerp(new THREE.Color(baseColor), 0.45);
+          mesh.material = new THREE.MeshToonMaterial({
+            color: tinted,
+            emissive: tinted.clone().multiplyScalar(0.12),
+          });
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+        }
+      });
+    };
+
+    /** Normalize a loaded model to fit a bounding box and sit at y=0 */
+    const normalizeModel = (model: THREE.Object3D, height = 0.92) => {
+      const box    = new THREE.Box3().setFromObject(model);
+      const size   = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const s = height / maxDim;
+      model.scale.setScalar(s);
+      const box2 = new THREE.Box3().setFromObject(model);
+      model.position.y -= box2.min.y;
+    };
+
+    /** Replace wizard avatar with the loaded model group */
+    const swapAvatar = (player: Player, model: THREE.Group) => {
+      const toRemove = player.mesh.children.filter(c => c !== player.shieldMesh);
+      toRemove.forEach(c => player.mesh.remove(c));
+      player.mesh.add(model);
+      player.glbModel = model;
+      player.rig.hat  = { rotation: { z: 0, x: 0 } } as unknown as THREE.Mesh;
+      player.rig.wand = { rotation: { z: 0, x: 0 }, position: new THREE.Vector3() } as unknown as THREE.Mesh;
+      player.rig.glow = { position: new THREE.Vector3() } as unknown as THREE.Mesh;
+    };
+
     const loadCharacterModel = (player: Player, charType: CharacterType) => {
       const charDef = CHARACTERS[charType];
-      const loader = new GLTFLoader();
+      const loader  = new GLTFLoader();
+      const rigDir  = `/models/${charType}`;
+
+      // Try loading the rigged+animated version first
       loader.load(
-        charDef.modelPath,
-        (gltf) => {
-          const model = gltf.scene;
+        `${rigDir}/rigged.glb`,
+        (riggedGltf) => {
+          const model = riggedGltf.scene;
+          colorizeModel(model, charDef, player.baseColor);
+          normalizeModel(model);
+          swapAvatar(player, model);
 
-          // ── Apply theme color to every mesh in the model ──────────────────
-          // Meshy preview meshes have no textures; toon shading with the
-          // character's theme color makes them look intentionally stylized.
-          const themeColor = new THREE.Color(charDef.themeColor);
-          const accentColor = new THREE.Color(charDef.accentColor);
-          let meshIdx = 0;
-          model.traverse((child) => {
-            if ((child as THREE.Mesh).isMesh) {
-              const mesh = child as THREE.Mesh;
-              // Alternate between theme and accent for visual variety
-              const col = meshIdx % 3 === 2 ? accentColor : themeColor;
-              meshIdx++;
-              // Use player's actual baseColor to tint the theme (so cyan player1
-              // and lavender player2 still look distinct even on the same character)
-              const tinted = col.clone().lerp(new THREE.Color(player.baseColor), 0.45);
-              mesh.material = new THREE.MeshToonMaterial({
-                color: tinted,
-                emissive: tinted.clone().multiplyScalar(0.12),
-              });
-              mesh.castShadow = false;
-              mesh.receiveShadow = false;
+          // Set up AnimationMixer on the rigged model
+          player.mixer = new THREE.AnimationMixer(model);
+
+          // Collect clips from the rigged GLB itself (may have none)
+          const clips: Record<string, THREE.AnimationClip> = {};
+          riggedGltf.animations.forEach(clip => { clips[clip.name] = clip; });
+
+          // Load additional animation GLBs and register their clips
+          const animFiles: Array<{ state: string; file: string }> = [
+            { state: 'idle', file: `${rigDir}/idle.glb` },
+            { state: 'walk', file: `${rigDir}/walk.glb` },
+            { state: 'run',  file: `${rigDir}/run.glb` },
+            { state: 'jump', file: `${rigDir}/jump.glb` },
+            { state: 'cast', file: `${rigDir}/cast.glb` },
+            { state: 'hit',  file: `${rigDir}/hit.glb` },
+          ];
+
+          let loaded = 0;
+          const onAllLoaded = () => {
+            // Register actions from collected clips
+            for (const [state, clip] of Object.entries(clips)) {
+              const action = player.mixer!.clipAction(clip);
+              if (state === 'idle' || state === 'walk' || state === 'run') {
+                action.loop = THREE.LoopRepeat;
+              } else {
+                action.loop = THREE.LoopOnce;
+                action.clampWhenFinished = true;
+              }
+              player.animActions[state] = action;
             }
+
+            // Start playing idle
+            if (player.animActions['idle']) {
+              player.animActions['idle'].play();
+              player.currentAnimState = 'idle';
+            }
+          };
+
+          animFiles.forEach(({ state, file }) => {
+            loader.load(
+              file,
+              (animGltf) => {
+                if (animGltf.animations.length > 0) {
+                  clips[state] = animGltf.animations[0];
+                }
+                loaded++;
+                if (loaded === animFiles.length) onAllLoaded();
+              },
+              undefined,
+              () => {
+                loaded++;
+                if (loaded === animFiles.length) onAllLoaded();
+              }
+            );
           });
-
-          // ── Normalize size: fit inside a 0.92-unit-tall bounding box ──────
-          const box    = new THREE.Box3().setFromObject(model);
-          const size   = box.getSize(new THREE.Vector3());
-          const maxDim = Math.max(size.x, size.y, size.z);
-          const targetHeight = 0.92;
-          const s = targetHeight / maxDim;
-          model.scale.setScalar(s);
-
-          // ── Reposition so feet sit at y=0 of the model group ──────────────
-          const box2 = new THREE.Box3().setFromObject(model);
-          model.position.y -= box2.min.y;
-
-          // ── Swap out wizard avatar, keep shield ────────────────────────────
-          const toRemove = player.mesh.children.filter(c => c !== player.shieldMesh);
-          toRemove.forEach(c => player.mesh.remove(c));
-          player.mesh.add(model);
-
-          // Store reference for procedural animation
-          player.glbModel = model;
-
-          // Silence rig references so old wobble code doesn't crash
-          player.rig.hat  = { rotation: { z: 0, x: 0 } } as unknown as THREE.Mesh;
-          player.rig.wand = { rotation: { z: 0, x: 0 }, position: new THREE.Vector3() } as unknown as THREE.Mesh;
-          player.rig.glow = { position: new THREE.Vector3() } as unknown as THREE.Mesh;
         },
         undefined,
-        () => { /* fallback: keeps procedural wizard avatar */ }
+        () => {
+          // No rigged version — fall back to plain GLB (procedural animation)
+          loader.load(
+            charDef.modelPath,
+            (gltf) => {
+              const model = gltf.scene;
+              colorizeModel(model, charDef, player.baseColor);
+              normalizeModel(model);
+              swapAvatar(player, model);
+            },
+            undefined,
+            () => { /* keep wizard avatar */ }
+          );
+        }
       );
     };
 
-    // Load GLB for all characters (wizard included — wizard.glb from Meshy)
+    // Load character models for both players
     loadCharacterModel(player1, p1Char);
     loadCharacterModel(player2, p2Char);
     const localRole = mergedConfig.localPlayer === 'player2' ? 'player2' : 'player1';

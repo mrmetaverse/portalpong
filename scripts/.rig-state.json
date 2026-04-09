@@ -1,0 +1,22 @@
+{
+  "rogue_rig": "019d7461-d5b2-7a15-b985-b0cefc40933d",
+  "rogue_anim_idle": "019d7462-677a-71d9-9aa0-a89875d7d349",
+  "rogue_anim_jump": "019d7462-99ab-71de-bccd-a08d18427106",
+  "rogue_anim_cast": "019d7462-cb4e-71de-9df2-5d808e7619f1",
+  "rogue_anim_hit": "019d7462-e866-7c4f-8032-f64357f97896",
+  "witch_rig": "019d7463-062d-7a72-9955-e22e728098cc",
+  "witch_anim_idle": "019d7463-81d3-7a89-8bf8-0034def325d2",
+  "witch_anim_jump": "019d7463-b3f5-7c7a-8191-7e70cff65ebe",
+  "witch_anim_cast": "019d7463-e657-720c-b408-c74616206b84",
+  "witch_anim_hit": "019d7464-0331-7c7c-8027-3a32caf89df0",
+  "berserker_rig": "019d7464-359c-7aa9-84d1-b86a9c417def",
+  "berserker_anim_idle": "019d7464-f126-7acc-a881-a678dc209604",
+  "berserker_anim_jump": "019d7465-2314-7c99-b529-378ccd4a557f",
+  "berserker_anim_cast": "019d7465-5479-7c99-b76a-ca7ee65d9ebf",
+  "berserker_anim_hit": "019d7465-70fb-7c97-960e-7f82db08ba78",
+  "sage_rig": "019d7465-ac12-7c9e-a272-626c1b78f1b5",
+  "sage_anim_idle": "019d7466-9a86-7cea-9f7e-5fc2abce9d1f",
+  "sage_anim_jump": "019d7466-cca7-726e-a758-e457b8072a7f",
+  "sage_anim_cast": "019d7466-fea2-7ccf-8e21-48467fff5636",
+  "sage_anim_hit": "019d7467-1aea-7b3a-878e-7c63f9a66814"
+}
