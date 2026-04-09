@@ -1,5 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { CHARACTERS, CharacterType, getRpsMultiplier } from '../data/characters';
 
 interface GameState {
   player1Score: number;
@@ -29,6 +31,8 @@ export interface PortalPongConfig {
   seed: number;
   player1Color?: WizardColorKey;
   player2Color?: WizardColorKey;
+  player1Character?: CharacterType;
+  player2Character?: CharacterType;
   aiDifficulty?: number;
   localPlayer?: 'player1' | 'player2';
   mode?: 'ai' | 'matchmaking';
@@ -834,11 +838,36 @@ class Player {
   powerups: Partial<Record<PowerupType, number>>;
   baseColor: number;
   activePowerupLabel: string;
+  /** Multipliers from chosen character (default 1.0 for wizard) */
+  statSpeed: number;
+  statJump: number;
+  statPower: number;
+  statDefense: number;
+  statCooldown: number;
+  /** RPS damage multiplier vs the opponent's character */
+  rpsMultiplier: number;
+  characterType: CharacterType;
 
-  constructor(scene: THREE.Scene, color: number, startX: number, id: 'player1' | 'player2') {
+  constructor(
+    scene: THREE.Scene,
+    color: number,
+    startX: number,
+    id: 'player1' | 'player2',
+    characterType: CharacterType = 'wizard',
+    opponentCharacter: CharacterType = 'wizard'
+  ) {
+    this.characterType = characterType;
+    const charDef = CHARACTERS[characterType];
+    this.statSpeed    = charDef.stats.speed;
+    this.statJump     = charDef.stats.jump;
+    this.statPower    = charDef.stats.power;
+    this.statDefense  = charDef.stats.defense;
+    this.statCooldown = charDef.stats.cooldown;
+    this.rpsMultiplier = getRpsMultiplier(characterType, opponentCharacter);
+
     this.rig = createWizardAvatar(color, startX < 0);
     this.mesh = this.rig.root;
-    this.mesh.scale.setScalar(0.84);
+    this.mesh.scale.setScalar(0.84 * charDef.stats.size);
     this.mesh.position.set(startX, 0.44, 0);
     this.velocity = new THREE.Vector3(0, 0, 0);
     this.onGround = true;
@@ -967,7 +996,7 @@ class Player {
     const canUseGroundJump = this.onGround || this.coyoteFrames > 0;
     const canUseAirJump = this.jumpsUsed < maxAirJumps + 1 && !canUseGroundJump;
     if (this.jumpBufferFrames > 0 && (canUseGroundJump || canUseAirJump)) {
-      const quickJumpVelocity = 0.315;
+      const quickJumpVelocity = 0.315 * this.statJump;
       this.velocity.y = quickJumpVelocity;
       this.jumpBufferFrames = 0;
       this.coyoteFrames = 0;
@@ -1069,7 +1098,8 @@ class Player {
   }
 
   moveLeft() {
-    const sp = this.hasPowerup('doubleSize') ? 0.5 : 1;
+    const sizeSp = this.hasPowerup('doubleSize') ? 0.5 : 1;
+    const sp = sizeSp * this.statSpeed;
     this.velocity.x = Math.max(this.velocity.x - 0.018 * sp, -0.085 * sp);
     this.direction.x = -1;
     this.facing = -1;
@@ -1077,7 +1107,8 @@ class Player {
   }
 
   moveRight() {
-    const sp = this.hasPowerup('doubleSize') ? 0.5 : 1;
+    const sizeSp = this.hasPowerup('doubleSize') ? 0.5 : 1;
+    const sp = sizeSp * this.statSpeed;
     this.velocity.x = Math.min(this.velocity.x + 0.018 * sp, 0.085 * sp);
     this.direction.x = 1;
     this.facing = 1;
@@ -1097,7 +1128,9 @@ class Player {
   }
 
   applyKnockback(impulse: THREE.Vector3) {
-    this.velocity.add(impulse);
+    // Higher defense = less knockback received
+    const reduced = impulse.clone().multiplyScalar(1 / this.statDefense);
+    this.velocity.add(reduced);
     this.velocity.x = THREE.MathUtils.clamp(this.velocity.x, -0.19, 0.19);
     this.velocity.y = Math.min(this.velocity.y, 0.36);
   }
@@ -1123,9 +1156,9 @@ class Player {
 
   castSpells(scene: THREE.Scene, target: THREE.Vector3, homingTargets?: Array<{ position: THREE.Vector3 }>): Spell[] {
     if (this.spellCooldown > 0) return [];
-    this.spellCooldown = 16;
+    this.spellCooldown = Math.round(16 * this.statCooldown);
 
-    const explosionScale = this.hasPowerup('doubleSize') ? 2 : 1;
+    const explosionScale = (this.hasPowerup('doubleSize') ? 2 : 1) * this.statPower;
     const homing = this.hasPowerup('homingShots');
 
     if (this.hasPowerup('tripleBlast')) {
@@ -1335,6 +1368,7 @@ class PowerupPickup {
   age: number;
   scene: THREE.Scene;
   labelSprite: THREE.Sprite;
+  _modelGroup?: THREE.Group;
 
   constructor(scene: THREE.Scene, position: THREE.Vector3, type: PowerupType) {
     this.scene = scene;
@@ -1349,6 +1383,26 @@ class PowerupPickup {
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.position.copy(this.position);
     scene.add(this.mesh);
+
+    // Try loading the GLB icon — replaces octahedron if available
+    const loader = new GLTFLoader();
+    loader.load(
+      `/models/powerup_${type}.glb`,
+      (gltf) => {
+        if (this.collected) return;
+        const model = gltf.scene;
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        model.scale.setScalar(0.56 / maxDim);
+        scene.remove(this.mesh);
+        this._modelGroup = model;
+        this._modelGroup.position.copy(this.position);
+        scene.add(this._modelGroup);
+      },
+      undefined,
+      () => { /* keep octahedron on error */ }
+    );
 
     const glowGeo = new THREE.SphereGeometry(0.42, 16, 16);
     const glowMat = new THREE.MeshBasicMaterial({
@@ -1380,17 +1434,27 @@ class PowerupPickup {
   update(dt: number) {
     this.age += dt;
     const bob = Math.sin(this.age * 2.2) * 0.12;
-    this.mesh.position.y = this.position.y + bob;
-    this.mesh.rotation.y += 0.04;
-    this.glowMesh.position.y = this.position.y + bob;
+    const y = this.position.y + bob;
+    if (this._modelGroup) {
+      this._modelGroup.position.y = y;
+      this._modelGroup.rotation.y += 0.04;
+    } else {
+      this.mesh.position.y = y;
+      this.mesh.rotation.y += 0.04;
+    }
+    this.glowMesh.position.y = y;
     this.glowMesh.scale.setScalar(1 + Math.sin(this.age * 3.1) * 0.07);
-    this.labelSprite.position.y = this.position.y + bob + 0.65;
+    this.labelSprite.position.y = y + 0.65;
   }
 
   collect() {
     if (this.collected) return;
     this.collected = true;
-    this.scene.remove(this.mesh);
+    if (this._modelGroup) {
+      this.scene.remove(this._modelGroup);
+    } else {
+      this.scene.remove(this.mesh);
+    }
     this.scene.remove(this.glowMesh);
     this.scene.remove(this.labelSprite);
     (this.mesh.material as THREE.MeshBasicMaterial).dispose();
@@ -1711,8 +1775,46 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
     const playerSpawnX = THREE.MathUtils.clamp(worldHalfWidth - 3.2, 3.8, 7.2);
     const player1Theme = WIZARD_COLORS[mergedConfig.player1Color ?? 'cyan'];
     const player2Theme = WIZARD_COLORS[mergedConfig.player2Color ?? 'lavender'];
-    const player1 = new Player(scene, player1Theme.hex, -playerSpawnX, 'player1');
-    const player2 = new Player(scene, player2Theme.hex, playerSpawnX, 'player2');
+    const p1Char = mergedConfig.player1Character ?? 'wizard';
+    const p2Char = mergedConfig.player2Character ?? 'wizard';
+    const player1 = new Player(scene, player1Theme.hex, -playerSpawnX, 'player1', p1Char, p2Char);
+    const player2 = new Player(scene, player2Theme.hex, playerSpawnX, 'player2', p2Char, p1Char);
+
+    // Async: swap wizard avatar for loaded GLB character model (non-blocking)
+    const loadCharacterModel = (player: Player, charType: CharacterType) => {
+      const modelPath = CHARACTERS[charType].modelPath;
+      const loader = new GLTFLoader();
+      loader.load(
+        modelPath,
+        (gltf) => {
+          const model = gltf.scene;
+          // Normalize model size to match wizard avatar bounding box (~0.9 tall)
+          const box = new THREE.Box3().setFromObject(model);
+          const size = box.getSize(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z);
+          const targetHeight = 0.9;
+          model.scale.setScalar(targetHeight / maxDim);
+          // Re-center at foot level
+          const center = box.getCenter(new THREE.Vector3());
+          model.position.sub(center.multiplyScalar(targetHeight / maxDim));
+          model.position.y += targetHeight / 2;
+          // Remove wizard children, keep shield
+          const toRemove = player.mesh.children.filter(c => c !== player.shieldMesh);
+          toRemove.forEach(c => player.mesh.remove(c));
+          player.mesh.add(model);
+          // Update rig references to no-ops so wobble code doesn't crash
+          player.rig.hat   = { rotation: { z: 0, x: 0 } } as unknown as THREE.Mesh;
+          player.rig.wand  = { rotation: { z: 0, x: 0 }, position: new THREE.Vector3() } as unknown as THREE.Mesh;
+          player.rig.glow  = { position: new THREE.Vector3() } as unknown as THREE.Mesh;
+        },
+        undefined,
+        () => { /* fallback stays — wizard avatar */ }
+      );
+    };
+
+    // Only load the model if it's not the default wizard (wizard uses procedural avatar)
+    if (p1Char !== 'wizard') loadCharacterModel(player1, p1Char);
+    if (p2Char !== 'wizard') loadCharacterModel(player2, p2Char);
     const localRole = mergedConfig.localPlayer === 'player2' ? 'player2' : 'player1';
     const activePlayer = localRole === 'player2' ? player2 : player1;
     const controlledByAi = localRole === 'player1' ? player2 : player1;
@@ -2358,7 +2460,10 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
       const shieldFactor = target.shieldActive ? 0.32 : 1;
       const baseStrength = directHit ? 0.22 : 0.075;
-      target.applyKnockback(direction.multiplyScalar(baseStrength * shieldFactor));
+      // Attacker's RPS multiplier boosts knockback dealt
+      const attacker = spell.owner === 'player1' ? player1 : player2;
+      const rpsFactor = attacker.rpsMultiplier;
+      target.applyKnockback(direction.multiplyScalar(baseStrength * shieldFactor * rpsFactor));
       spell.nudgedPlayers.add(target.id);
     };
 

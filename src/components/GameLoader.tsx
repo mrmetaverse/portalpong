@@ -3,6 +3,8 @@
 import React from 'react';
 import PortalPongGame, { PortalPongConfig, PortalPongConfigPreset, WizardColorKey, MatchResult } from './PortalPongGame';
 import LobbyScreen, { PlayerProfile } from './LobbyScreen';
+import CharacterSelect from './CharacterSelect';
+import { CharacterType } from '../data/characters';
 
 // ─── Player identity (persisted to localStorage) ──────────────────────────────
 
@@ -49,7 +51,7 @@ const wizardColorOptions: Array<{ key: WizardColorKey; label: string; preview: s
   { key: 'orange', label: 'Orange', preview: '#f97316' }
 ];
 
-type MenuStep = 'level' | 'color' | 'ai';
+type MenuStep = 'level' | 'color' | 'character' | 'ai';
 
 const RetroPanel: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div className="w-full max-w-4xl border border-cyan-200/40 bg-slate-900/35 p-4 shadow-[0_0_24px_rgba(34,211,238,0.18)] backdrop-blur-md">
@@ -67,6 +69,8 @@ const GameLoader: React.FC = () => {
   const [launchGame, setLaunchGame] = React.useState(false);
   const [showLobby, setShowLobby] = React.useState(false);
   const [menuStep, setMenuStep] = React.useState<MenuStep>('level');
+  const [p1Character, setP1Character] = React.useState<CharacterType>('wizard');
+  const [p2Character, setP2Character] = React.useState<CharacterType>('wizard');
   const [parallaxX, setParallaxX] = React.useState(0);
   const [parallaxY, setParallaxY] = React.useState(0);
   const [pendingMatchInfo, setPendingMatchInfo] = React.useState<{ roomCode: string; side: 'player1' | 'player2'; player1Id: string; player2Id: string } | null>(null);
@@ -147,7 +151,9 @@ const GameLoader: React.FC = () => {
   const launchVsAi = () => {
     setPortalConfig(prev => ({
       ...prev, mode: 'ai',
-      player1Id: player.id, player2Id: ''
+      player1Id: player.id, player2Id: '',
+      player1Character: p1Character,
+      player2Character: p2Character
     }));
     setLaunchGame(true);
   };
@@ -188,10 +194,10 @@ const GameLoader: React.FC = () => {
 
         {/* Tab nav */}
         <div className="mb-5 flex gap-2 text-xs uppercase rounded-lg border border-white/10 bg-slate-900/25 px-2 py-2 backdrop-blur-sm flex-wrap justify-center">
-          {(['level', 'color', 'ai'] as MenuStep[]).map(step => (
+          {(['level', 'color', 'character', 'ai'] as MenuStep[]).map(step => (
             <button key={step} type="button" onClick={() => setMenuStep(step)}
               className={`border px-3 py-1 transition-colors ${menuStep === step ? 'border-cyan-200/80 bg-cyan-300/15 text-cyan-100' : 'border-white/20 bg-white/5 text-slate-200 hover:bg-white/10'}`}>
-              {step === 'ai' ? 'AI Match' : step === 'level' ? 'Level' : 'Colors'}
+              {step === 'ai' ? 'AI Match' : step === 'level' ? 'Level' : step === 'color' ? 'Colors' : 'Characters'}
             </button>
           ))}
           <button type="button" onClick={() => setShowLobby(true)}
@@ -275,9 +281,31 @@ const GameLoader: React.FC = () => {
             <div className="mt-4 flex gap-2">
               <button type="button" className="border border-slate-500 px-4 py-2 uppercase text-xs" onClick={() => setMenuStep('level')}>Back</button>
               <button type="button" className="border border-yellow-300 bg-yellow-300/10 px-4 py-2 text-yellow-200 uppercase tracking-wide hover:bg-yellow-300/20"
-                onClick={() => setMenuStep('ai')}>Next: AI Match</button>
+                onClick={() => setMenuStep('character')}>Next: Characters</button>
             </div>
           </RetroPanel>
+        )}
+
+        {/* Character select */}
+        {menuStep === 'character' && (
+          <div className="flex flex-col md:flex-row gap-6 items-start justify-center">
+            <CharacterSelect
+              side={1}
+              selected={p1Character}
+              onSelect={setP1Character}
+              opponent={p2Character}
+              onConfirm={() => setMenuStep('ai')}
+              confirmLabel="Lock In P1"
+            />
+            <CharacterSelect
+              side={2}
+              selected={p2Character}
+              onSelect={setP2Character}
+              opponent={p1Character}
+              onConfirm={() => setMenuStep('ai')}
+              confirmLabel="Lock In P2"
+            />
+          </div>
         )}
 
         {/* AI match */}
