@@ -36,11 +36,17 @@ interface Leaderboards {
 
 type LobbyView = 'menu' | 'browse' | 'create' | 'waiting' | 'queue' | 'leaderboard' | 'profile';
 
+type LobbyInitialMode = 'ai' | 'create' | 'join-code' | 'browse' | 'auto-match' | undefined;
+
 interface LobbyScreenProps {
   player: PlayerProfile;
   onPlayerUpdate: (p: PlayerProfile) => void;
   onClose: () => void;
   onLaunch: (config: PortalPongConfig, matchInfo: { roomCode: string; side: 'player1' | 'player2'; player1Id: string; player2Id: string }) => void;
+  /** If set, lobby opens directly on this sub-view instead of the menu */
+  initialMode?: LobbyInitialMode;
+  /** Pre-configured level/game settings from the wizard (used when creating rooms) */
+  preConfigured?: Partial<PortalPongConfig>;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -80,11 +86,25 @@ const statN = (v: unknown) => Number(v) || 0;
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-const LobbyScreen: React.FC<LobbyScreenProps> = ({ player, onPlayerUpdate, onClose, onLaunch }) => {
-  const [view, setView] = React.useState<LobbyView>('menu');
+const LobbyScreen: React.FC<LobbyScreenProps> = ({
+  player, onPlayerUpdate, onClose, onLaunch, initialMode, preConfigured
+}) => {
+  const initialView: LobbyView = (() => {
+    if (initialMode === 'create') return 'create';
+    if (initialMode === 'join-code') return 'menu'; // menu has join-by-code field
+    if (initialMode === 'browse') return 'browse';
+    if (initialMode === 'auto-match') return 'queue';
+    return 'menu';
+  })();
+  const [view, setView] = React.useState<LobbyView>(initialView);
   const [editName, setEditName] = React.useState(player.username);
   const [editColor, setEditColor] = React.useState<WizardColorKey>(player.color);
   const [savingProfile, setSavingProfile] = React.useState(false);
+
+  // Auto-trigger browse load when opening in browse mode
+  React.useEffect(() => {
+    if (initialMode === 'browse') loadRooms(); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Browse state
   const [rooms, setRooms] = React.useState<LobbyRoom[]>([]);
@@ -160,11 +180,14 @@ const LobbyScreen: React.FC<LobbyScreenProps> = ({ player, onPlayerUpdate, onClo
   const createRoom = async () => {
     setCreating(true); setError('');
     const code = Math.random().toString(36).slice(2, 8).toUpperCase();
-    const seed = Math.floor(Math.random() * 1e6);
+    // Use pre-configured settings from wizard if available
+    const seed = preConfigured?.seed ?? Math.floor(Math.random() * 1e6);
+    const preset = preConfigured?.preset ?? createPreset;
+    const background = preConfigured?.background ?? createBg;
     try {
       const res = await api('/api/rooms', {
         method: 'POST',
-        body: JSON.stringify({ code, hostId: player.id, hostName: player.username, hostColor: player.color, preset: createPreset, background: createBg, seed, isPublic: createPublic })
+        body: JSON.stringify({ code, hostId: player.id, hostName: player.username, hostColor: player.color, preset, background, seed, isPublic: createPublic })
       });
       if (!res.ok) { setError(res.error || 'Could not create room'); setCreating(false); return; }
       setWaitingRoom(res.room);
@@ -212,14 +235,17 @@ const LobbyScreen: React.FC<LobbyScreenProps> = ({ player, onPlayerUpdate, onClo
     const config: PortalPongConfig = {
       background: room.background as PortalPongConfig['background'],
       preset: room.preset as PortalPongConfig['preset'] ?? 'normal',
-      parallax: true,
+      parallax: preConfigured?.parallax ?? true,
       seed: Number(room.seed),
       player1Color: (room.hostColor as WizardColorKey) ?? 'cyan',
       player2Color: (room.player2Color as WizardColorKey) ?? 'lavender',
       aiDifficulty: 3,
       mode: 'matchmaking',
       localPlayer: side,
-      matchmakingRoom: room.code
+      matchmakingRoom: room.code,
+      // Carry character choices from the wizard
+      player1Character: preConfigured?.player1Character,
+      player2Character: preConfigured?.player2Character,
     };
     onLaunch(config, {
       roomCode: room.code, side,

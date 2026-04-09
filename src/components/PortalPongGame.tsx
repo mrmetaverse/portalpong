@@ -3050,7 +3050,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       }
       renderer.dispose();
     };
-  }, [mergedConfig, onExit, mobileControlsEnabled]);
+  }, [mergedConfig, onExit, onMatchEnd, mobileControlsEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const leftTeamColor = WIZARD_COLORS[mergedConfig.player1Color ?? 'cyan'];
   const rightTeamColor = WIZARD_COLORS[mergedConfig.player2Color ?? 'lavender'];
