@@ -1748,24 +1748,37 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
     const generatePlatforms = () => {
       const platforms: Platform[] = [];
       const pairCount = PRESET_TO_PAIRS[mergedConfig.preset] + 2;
+      // Use most of the vertical space — leave only a small gap at top
       const minY = 1.35;
-      const maxY = Math.max(minY + 0.6, Math.min(gameHeight - 1.4, 6.8));
+      const maxY = Math.max(minY + 2.0, gameHeight - 0.7);
+      // Minimum vertical separation between consecutive tiers
+      const minTierGap = (maxY - minY) / (pairCount + 1) * 0.7;
 
-      // Center platform: small tilt, keep center-ish so it never touches portals
-      platforms.push(new Platform(scene, 0, randomBetween(random, 2.3, 3.8), randomBetween(random, 1.9, 2.9), randTilt(8)));
+      // Low center platform — always below portal zone, helps redirect ball upward
+      platforms.push(new Platform(scene, 0, randomBetween(random, 2.2, 3.2), randomBetween(random, 1.9, 2.9), randTilt(8)));
 
+      // Track last placed Y to enforce spacing
+      let lastY = minY;
       for (let i = 0; i < pairCount; i++) {
         const laneT = (i + 1) / (pairCount + 1);
         const maxWidth = THREE.MathUtils.clamp(worldHalfWidth * 0.28, 2.0, 3.4);
         const width = randomBetween(random, 1.6, maxWidth);
         const minX = 2.3 + laneT * 0.35;
-        const laneY = minY + laneT * (maxY - minY);
-        const y = THREE.MathUtils.clamp(laneY + randomBetween(random, -0.55, 0.65), minY, maxY);
 
-        // If this Y is in the portal mouth zone, the outer edge must not reach the portal
+        // Distribute tiers with a slight upward bias — upper platforms go higher
+        const rawLaneY = minY + Math.pow(laneT, 0.75) * (maxY - minY);
+        // Ensure minimum gap from previous tier
+        const clampedMin = Math.max(rawLaneY - 0.5, lastY + minTierGap);
+        const clampedMax = Math.min(rawLaneY + 0.7, maxY);
+        const y = THREE.MathUtils.clamp(
+          randomBetween(random, clampedMin, Math.max(clampedMin + 0.1, clampedMax)),
+          minY, maxY
+        );
+        lastY = y;
+
+        // Portal clearance: if Y overlaps the portal mouth, pull platforms back
         const inPortalZone = y + 0.3 > PORTAL_Y_MIN && y - 0.3 < PORTAL_Y_MAX;
         const portalSafeEdge = inPortalZone ? goalCenterX - PORTAL_CLEAR_DIST : worldHalfWidth;
-        // maxX is the platform CENTER; right edge = x + width/2 must stay ≤ portalSafeEdge
         const maxX = Math.max(minX + 0.25, Math.min(worldHalfWidth - width / 2 - 1.0, portalSafeEdge - width / 2));
 
         const x = randomBetween(random, minX, maxX);
@@ -1774,9 +1787,11 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         platforms.push(new Platform(scene, -x, y, width, -tilt));
       }
 
+      // 1–2 high center platforms to give the upper area some action
       const extraCenterCount = 1 + Math.floor(random() * 2);
       for (let i = 0; i < extraCenterCount; i += 1) {
-        const y = randomBetween(random, 2.4, Math.min(maxY + 0.8, gameHeight - 1.0));
+        // Bias these toward the upper half of the world
+        const y = randomBetween(random, maxY * 0.55, maxY);
         const width = randomBetween(random, 1.4, 2.1);
         platforms.push(new Platform(scene, randomBetween(random, -1.1, 1.1), y, width, randTilt(10)));
       }
