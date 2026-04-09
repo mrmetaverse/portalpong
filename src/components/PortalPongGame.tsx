@@ -1664,11 +1664,15 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
     seed: (config?.seed ?? 42) + matchSeedBump,
     player1Color: config?.player1Color ?? 'cyan',
     player2Color: config?.player2Color ?? 'lavender',
+    player1Character: config?.player1Character ?? 'wizard',
+    player2Character: config?.player2Character ?? 'wizard',
     aiDifficulty: THREE.MathUtils.clamp(config?.aiDifficulty ?? 3, 1, 10),
     localPlayer: config?.localPlayer ?? 'player1',
     mode: config?.mode ?? 'ai',
-    matchmakingRoom: config?.matchmakingRoom ?? ''
-  }), [config?.aiDifficulty, config?.background, config?.localPlayer, config?.matchmakingRoom, config?.mode, config?.parallax, config?.player1Color, config?.player2Color, config?.preset, config?.seed, matchSeedBump]);
+    matchmakingRoom: config?.matchmakingRoom ?? '',
+    player1Id: config?.player1Id ?? '',
+    player2Id: config?.player2Id ?? '',
+  }), [config, matchSeedBump]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') {
@@ -2699,80 +2703,88 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       const aiDifficulty = mergedConfig.aiDifficulty ?? 3;
       // linearSkill: 0 at diff=1, 1 at diff=10
       const linearSkill = THREE.MathUtils.clamp((aiDifficulty - 1) / 9, 0, 1);
-      // Steep S-curve: levels 1-4 feel dumb, levels 7-10 feel superhuman
-      const pace = THREE.MathUtils.smoothstep(linearSkill, 0.0, 1.0);
+      // Aggressive exponential curve: lv1-3 are vegetables, lv7+ are gods.
+      // pow(x, 3) means lv5 (linearSkill=0.44) → pace=0.087, lv8 (0.78)→0.47, lv10→1.0
+      const pace = Math.pow(linearSkill, 3);
+      // For high-level (8-10) specific overrides we use a separate "elite" factor
+      const elite = THREE.MathUtils.clamp((aiDifficulty - 7) / 3, 0, 1); // 0 below lv7, 1 at lv10
       const lerp = (slow: number, fast: number) => THREE.MathUtils.lerp(slow, fast, pace);
+      const eliteLerp = (slow: number, fast: number) => THREE.MathUtils.lerp(slow, fast, elite);
 
       // ── Reaction ─────────────────────────────────────────────────────────────
-      // Lv1: 3-5 sec gaps. Lv5: ~0.5 sec. Lv9: 1-2 frames (basically instant).
-      const reactionMin      = Math.round(lerp(180, 1));
-      const reactionVariance = Math.round(lerp(120, 2));
+      // Lv1: 4-7 sec gaps. Lv5: ~2 sec. Lv8+: every single frame.
+      const reactionMin      = elite > 0.3 ? 0 : Math.round(lerp(240, 8));
+      const reactionVariance = elite > 0.3 ? 1 : Math.round(lerp(180, 4));
 
       // ── Aim & prediction ──────────────────────────────────────────────────────
-      // Lv1: wildly off target. Lv10: pixel-perfect with trajectory lead.
-      const aimErrorX  = lerp(9.0,  0.05);
-      const aimErrorY  = lerp(5.0,  0.05);
-      // How many frames ahead to predict ball position (0 = react to current pos)
-      const prediction = lerp(0.0,  28.0);
-      // Random lateral noise added on top of prediction
-      const lateralNoise = lerp(6.0, 0.1);
+      const aimErrorX    = lerp(12.0, 0.02);
+      const aimErrorY    = lerp(6.0,  0.02);
+      const prediction   = lerp(0.0,  40.0);
+      const lateralNoise = lerp(8.0,  0.05);
 
       // ── Movement ──────────────────────────────────────────────────────────────
-      // Lv1: huge dead-zone, can't be bothered. Lv10: reacts to 0.1-unit deviation.
-      const deadZone         = lerp(6.0, 0.15);
-      // Lv1: 92% chance to just stand there. Lv10: 0% hesitation.
-      const hesitationChance = lerp(0.92, 0.0);
-      // Lv1: rarely reverses randomly. Lv10: always moves deliberately.
-      const wrongDirChance   = lerp(0.35, 0.0);
+      const deadZone         = lerp(8.0,  0.08);
+      const hesitationChance = lerp(0.95, 0.0);
+      const wrongDirChance   = lerp(0.4,  0.0);
 
       // ── Jumping ───────────────────────────────────────────────────────────────
-      // Lv1: almost never jumps. Lv10: aggressively jumps to intercept ball.
-      const jumpChance    = lerp(0.01, 0.95);
-      const jumpBallDelta = lerp(3.5, 0.4); // how far above AI ball must be to trigger jump
-      // Hold jump held for soaring trajectories at high levels
-      frame.jumpHeld = aiPlayer.velocity.y > 0.05 && random() < lerp(0.02, 0.85);
+      const jumpChance    = lerp(0.005, 0.98);
+      const jumpBallDelta = lerp(4.0,   0.2);
+      frame.jumpHeld = aiPlayer.velocity.y > 0.05 && random() < lerp(0.01, 0.92);
 
       // ── Casting ───────────────────────────────────────────────────────────────
-      // Lv1: almost never shoots, even from close range.
-      // Lv10: shoots constantly from anywhere, aims where ball WILL BE.
-      const castChance         = lerp(0.003, 0.55);
-      const castRange          = lerp(1.5,  20.0); // whole arena width at lv10
-      const lineupRange        = lerp(0.8,  18.0); // always "lined up" at lv10
-      const castCooldownMin    = Math.round(lerp(600, 16));
-      const castCooldownVar    = Math.round(lerp(400, 4));
+      const castChance      = lerp(0.001, 0.7);
+      const castRange       = lerp(1.2,   25.0);
+      const lineupRange     = lerp(0.6,   25.0);
+      const castCooldownMin = elite > 0.5 ? 8 : Math.round(lerp(900, 20));
+      const castCooldownVar = Math.round(lerp(500, 2));
 
       // ── Shield ────────────────────────────────────────────────────────────────
-      const shieldChance = lerp(0.0, 0.55);
-      const shieldRange  = lerp(1.5, 7.0);
+      const shieldChance = lerp(0.0, 0.7);
+      const shieldRange  = lerp(1.0, 9.0);
 
-      // ── Reaction gate: only update logic when timer fires ─────────────────────
-      if (aiReactionFrames > 0) {
+      // ── Elite: goal defense positioning (lv8+) ─────────────────────────────
+      // High-level AI doesn't just chase ball — it positions between ball and own goal.
+      const goalX = aiPlayer.id === 'player1' ? -worldHalfWidth + 1 : worldHalfWidth - 1;
+
+      // ── Elite AI runs EVERY FRAME with zero reaction delay ──────────────────
+      const isElite = elite > 0.3;
+
+      if (!isElite && aiReactionFrames > 0) {
         aiReactionFrames -= 1;
-        // Even while "waiting", high-level AI still tracks fast enough to hold movement
-        if (pace > 0.75) {
-          const quickDelta = ball.mesh.position.x - aiPlayer.mesh.position.x;
-          frame.left  = quickDelta < -deadZone;
-          frame.right = quickDelta > deadZone;
-        }
       } else {
         // Predict ball position several frames ahead
         const predictedBallX = ball.mesh.position.x + ball.velocity.x * prediction;
         const predictedBallY = ball.mesh.position.y + ball.velocity.y * prediction;
 
-        // Add noise to predicted target (less noise = more skill)
-        const noisyX = predictedBallX + randomBetween(random, -lateralNoise, lateralNoise);
-        const deltaX = noisyX - aiPlayer.mesh.position.x;
+        // Elite AI: position between ball and own goal for defense
+        let targetX: number;
+        if (isElite) {
+          // Intercept point: bias toward where ball is going, weighted toward own goal defense
+          const interceptX = predictedBallX;
+          const defenseX = (goalX + interceptX) * 0.5; // midpoint between goal and ball
+          // Ball heading toward our goal? Defend harder. Ball heading away? Chase it.
+          const ballHeadingToGoal = aiPlayer.id === 'player1'
+            ? ball.velocity.x < -0.01
+            : ball.velocity.x > 0.01;
+          targetX = ballHeadingToGoal
+            ? THREE.MathUtils.lerp(interceptX, defenseX, eliteLerp(0.3, 0.6))
+            : interceptX;
+        } else {
+          targetX = predictedBallX + randomBetween(random, -lateralNoise, lateralNoise);
+        }
+
+        const deltaX = targetX - aiPlayer.mesh.position.x;
 
         frame.left  = deltaX < -deadZone;
         frame.right = deltaX > deadZone;
 
-        // Random hesitation (low-level AI often just freezes)
-        if (random() < hesitationChance) {
+        // Low-level hesitation
+        if (!isElite && random() < hesitationChance) {
           frame.left = false;
           frame.right = false;
         }
-        // Low-level AI occasionally moves the WRONG direction
-        if (random() < wrongDirChance) {
+        if (!isElite && random() < wrongDirChance) {
           const tmp = frame.left;
           frame.left = frame.right;
           frame.right = tmp;
@@ -2780,33 +2792,35 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
         frame.down = false;
 
-        // Shield logic
+        // Shield: elite always shields incoming spells
         const spellIncoming = activeSpells.some(s =>
           s.owner !== aiPlayer.id &&
           s.mesh.position.distanceTo(aiPlayer.mesh.position) < shieldRange
         );
         frame.shieldHeld = spellIncoming
-          ? random() < lerp(0.05, 0.95)
+          ? random() < (isElite ? 0.98 : lerp(0.02, 0.8))
           : random() < shieldChance && ball.mesh.position.distanceTo(aiPlayer.mesh.position) < shieldRange;
 
-        // Aim (with error)
-        const errX = randomBetween(random, -aimErrorX, aimErrorX);
-        const errY = randomBetween(random, -aimErrorY, aimErrorY);
+        // Aim
+        const errX = isElite ? 0 : randomBetween(random, -aimErrorX, aimErrorX);
+        const errY = isElite ? 0 : randomBetween(random, -aimErrorY, aimErrorY);
         frame.aimX = predictedBallX + errX;
         frame.aimY = predictedBallY + 0.1 + errY;
 
-        // Jump: lv1 only jumps if ball is way above, lv10 jumps to intercept anytime
+        // Jump
         const ballHighEnough = predictedBallY > aiPlayer.mesh.position.y + jumpBallDelta;
-        const horizontallyClose = Math.abs(deltaX) < lerp(6.0, 4.0);
+        const horizontallyClose = Math.abs(deltaX) < (isElite ? 6 : lerp(7.0, 4.0));
         if (aiPlayer.onGround && ballHighEnough && horizontallyClose && random() < jumpChance) {
           frame.jumpQueued = true;
         }
-        // High-level AI also jumps off platforms to intercept aerial balls
-        if (!aiPlayer.onGround && pace > 0.7 && predictedBallY > aiPlayer.mesh.position.y + 0.5 && random() < pace * 0.6) {
+        // Elite: aggressively double-jump to reach aerial balls
+        if (!aiPlayer.onGround && isElite && predictedBallY > aiPlayer.mesh.position.y + 0.3) {
           frame.jumpQueued = true;
         }
 
-        aiReactionFrames = reactionMin + Math.floor(random() * Math.max(1, reactionVariance));
+        if (!isElite) {
+          aiReactionFrames = reactionMin + Math.floor(random() * Math.max(1, reactionVariance));
+        }
       }
 
       // ── Casting (runs every frame, gated by its own cooldown) ─────────────────
