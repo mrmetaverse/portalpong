@@ -838,6 +838,14 @@ class Player {
   powerups: Partial<Record<PowerupType, number>>;
   baseColor: number;
   activePowerupLabel: string;
+  /** The loaded GLB model group (null = still using procedural wizard avatar) */
+  glbModel: THREE.Group | null;
+  /** Running time for idle bob animation */
+  bobTime: number;
+  /** Squash scale: 1 normally, <1 on land, recovers over frames */
+  squashY: number;
+  /** Was on ground last frame (for landing detection) */
+  wasOnGround: boolean;
   /** Multipliers from chosen character (default 1.0 for wizard) */
   statSpeed: number;
   statJump: number;
@@ -890,6 +898,10 @@ class Player {
     this.powerups = {};
     this.baseColor = color;
     this.activePowerupLabel = '';
+    this.glbModel = null;
+    this.bobTime = Math.random() * Math.PI * 2;
+    this.squashY = 1;
+    this.wasOnGround = true;
     this.mesh.rotation.y = this.facing === 1 ? 0 : Math.PI;
 
     this.shieldMesh = new THREE.Mesh(
@@ -931,8 +943,9 @@ class Player {
     this.activePowerupLabel = anyActive ? lastLabel : '';
 
     // Double size: scale 2x, speed 0.5x; quarter size: scale 0.5x
-    const baseScale = 0.84;
-    const targetScale = this.hasPowerup('doubleSize') ? baseScale * 2 : this.hasPowerup('quarterSize') ? baseScale * 0.5 : baseScale;
+    const charSizeBase = 0.84 * CHARACTERS[this.characterType].stats.size;
+    const sizeMultiplier = this.hasPowerup('doubleSize') ? 2 : this.hasPowerup('quarterSize') ? 0.5 : 1;
+    const targetScale = charSizeBase * sizeMultiplier;
     this.mesh.scale.setScalar(targetScale);
 
     // Reflector: auto shield while active
@@ -1073,13 +1086,55 @@ class Player {
     this.velocity.x *= 0.78;
 
     const horizontalSpeed = Math.abs(this.velocity.x);
-    this.wobbleTime += 0.08 + horizontalSpeed * 0.6;
-    const wobble = Math.sin(this.wobbleTime) * Math.min(0.12, horizontalSpeed * 0.5 + 0.03);
-    this.rig.hat.rotation.z = wobble;
-    this.rig.hat.rotation.x = Math.cos(this.wobbleTime * 1.4) * 0.04;
-    this.rig.wand.rotation.z = this.rig.baseWandRotationZ + wobble * 1.8;
-    this.rig.wand.rotation.x = Math.sin(this.wobbleTime * 1.9) * 0.1;
-    this.rig.glow.position.y = 0.62 + Math.abs(wobble) * 0.2;
+
+    // ── Landing squash/stretch ────────────────────────────────────────────────
+    const justLanded = this.onGround && !this.wasOnGround;
+    if (justLanded) {
+      // Impact squash — heavier the fall, stronger the squash
+      const fallSpeed = Math.abs(prevPosition.y - this.mesh.position.y);
+      this.squashY = Math.max(0.55, 1 - fallSpeed * 8);
+    }
+    this.wasOnGround = this.onGround;
+    // Recover squash toward 1
+    if (this.squashY < 1) this.squashY = Math.min(1, this.squashY + 0.08);
+    // Stretch upward during fast upward movement
+    const airStretch = !this.onGround && this.velocity.y > 0.1 ? 1 + this.velocity.y * 1.8 : 1;
+    const finalScaleY = this.squashY * airStretch;
+
+    if (this.glbModel) {
+      // ── GLB model procedural animation ─────────────────────────────────────
+      this.bobTime += 0.045 + horizontalSpeed * 0.3;
+      const bob = Math.sin(this.bobTime) * 0.04;
+
+      // Lean in direction of movement
+      const lean = THREE.MathUtils.clamp(-this.velocity.x * 5, -0.35, 0.35);
+      this.glbModel.rotation.z = THREE.MathUtils.lerp(this.glbModel.rotation.z, lean, 0.18);
+
+      // Bob (only on ground)
+      const targetBobY = this.onGround ? bob : 0;
+      this.glbModel.position.y = THREE.MathUtils.lerp(this.glbModel.position.y, targetBobY, 0.2);
+
+      // Squash/stretch on the model group itself
+      this.glbModel.scale.y = THREE.MathUtils.lerp(this.glbModel.scale.y, finalScaleY, 0.25);
+      this.glbModel.scale.x = THREE.MathUtils.lerp(this.glbModel.scale.x, 1 / finalScaleY, 0.25);
+
+      // Facing direction
+      const targetFacingY = this.facing === 1 ? 0 : Math.PI;
+      this.glbModel.rotation.y = THREE.MathUtils.lerp(this.glbModel.rotation.y, targetFacingY, 0.25);
+    } else {
+      // ── Procedural wizard avatar animation ─────────────────────────────────
+      this.wobbleTime += 0.08 + horizontalSpeed * 0.6;
+      const wobble = Math.sin(this.wobbleTime) * Math.min(0.12, horizontalSpeed * 0.5 + 0.03);
+      this.rig.hat.rotation.z = wobble;
+      this.rig.hat.rotation.x = Math.cos(this.wobbleTime * 1.4) * 0.04;
+      this.rig.wand.rotation.z = this.rig.baseWandRotationZ + wobble * 1.8;
+      this.rig.wand.rotation.x = Math.sin(this.wobbleTime * 1.9) * 0.1;
+      this.rig.glow.position.y = 0.62 + Math.abs(wobble) * 0.2;
+
+      // Multiply the uniform scale by squash/stretch factors
+      this.mesh.scale.y *= finalScaleY;
+      this.mesh.scale.x *= (1 / finalScaleY);
+    }
 
     if (this.shieldActive) {
       this.shieldMesh.visible = true;
@@ -1782,39 +1837,70 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
     // Async: swap wizard avatar for loaded GLB character model (non-blocking)
     const loadCharacterModel = (player: Player, charType: CharacterType) => {
-      const modelPath = CHARACTERS[charType].modelPath;
+      const charDef = CHARACTERS[charType];
       const loader = new GLTFLoader();
       loader.load(
-        modelPath,
+        charDef.modelPath,
         (gltf) => {
           const model = gltf.scene;
-          // Normalize model size to match wizard avatar bounding box (~0.9 tall)
-          const box = new THREE.Box3().setFromObject(model);
-          const size = box.getSize(new THREE.Vector3());
+
+          // ── Apply theme color to every mesh in the model ──────────────────
+          // Meshy preview meshes have no textures; toon shading with the
+          // character's theme color makes them look intentionally stylized.
+          const themeColor = new THREE.Color(charDef.themeColor);
+          const accentColor = new THREE.Color(charDef.accentColor);
+          let meshIdx = 0;
+          model.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              const mesh = child as THREE.Mesh;
+              // Alternate between theme and accent for visual variety
+              const col = meshIdx % 3 === 2 ? accentColor : themeColor;
+              meshIdx++;
+              // Use player's actual baseColor to tint the theme (so cyan player1
+              // and lavender player2 still look distinct even on the same character)
+              const tinted = col.clone().lerp(new THREE.Color(player.baseColor), 0.45);
+              mesh.material = new THREE.MeshToonMaterial({
+                color: tinted,
+                emissive: tinted.clone().multiplyScalar(0.12),
+              });
+              mesh.castShadow = false;
+              mesh.receiveShadow = false;
+            }
+          });
+
+          // ── Normalize size: fit inside a 0.92-unit-tall bounding box ──────
+          const box    = new THREE.Box3().setFromObject(model);
+          const size   = box.getSize(new THREE.Vector3());
           const maxDim = Math.max(size.x, size.y, size.z);
-          const targetHeight = 0.9;
-          model.scale.setScalar(targetHeight / maxDim);
-          // Re-center at foot level
-          const center = box.getCenter(new THREE.Vector3());
-          model.position.sub(center.multiplyScalar(targetHeight / maxDim));
-          model.position.y += targetHeight / 2;
-          // Remove wizard children, keep shield
+          const targetHeight = 0.92;
+          const s = targetHeight / maxDim;
+          model.scale.setScalar(s);
+
+          // ── Reposition so feet sit at y=0 of the model group ──────────────
+          const box2 = new THREE.Box3().setFromObject(model);
+          model.position.y -= box2.min.y;
+
+          // ── Swap out wizard avatar, keep shield ────────────────────────────
           const toRemove = player.mesh.children.filter(c => c !== player.shieldMesh);
           toRemove.forEach(c => player.mesh.remove(c));
           player.mesh.add(model);
-          // Update rig references to no-ops so wobble code doesn't crash
-          player.rig.hat   = { rotation: { z: 0, x: 0 } } as unknown as THREE.Mesh;
-          player.rig.wand  = { rotation: { z: 0, x: 0 }, position: new THREE.Vector3() } as unknown as THREE.Mesh;
-          player.rig.glow  = { position: new THREE.Vector3() } as unknown as THREE.Mesh;
+
+          // Store reference for procedural animation
+          player.glbModel = model;
+
+          // Silence rig references so old wobble code doesn't crash
+          player.rig.hat  = { rotation: { z: 0, x: 0 } } as unknown as THREE.Mesh;
+          player.rig.wand = { rotation: { z: 0, x: 0 }, position: new THREE.Vector3() } as unknown as THREE.Mesh;
+          player.rig.glow = { position: new THREE.Vector3() } as unknown as THREE.Mesh;
         },
         undefined,
-        () => { /* fallback stays — wizard avatar */ }
+        () => { /* fallback: keeps procedural wizard avatar */ }
       );
     };
 
-    // Only load the model if it's not the default wizard (wizard uses procedural avatar)
-    if (p1Char !== 'wizard') loadCharacterModel(player1, p1Char);
-    if (p2Char !== 'wizard') loadCharacterModel(player2, p2Char);
+    // Load GLB for all characters (wizard included — wizard.glb from Meshy)
+    loadCharacterModel(player1, p1Char);
+    loadCharacterModel(player2, p2Char);
     const localRole = mergedConfig.localPlayer === 'player2' ? 'player2' : 'player1';
     const activePlayer = localRole === 'player2' ? player2 : player1;
     const controlledByAi = localRole === 'player1' ? player2 : player1;
