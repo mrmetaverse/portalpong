@@ -92,7 +92,8 @@ const BG_IDS: Array<Exclude<PortalPongConfig['background'], 'random'>> = [
   'bg7'
 ];
 
-const PRESET_TO_PAIRS: Record<PortalPongConfigPreset, number> = {
+// Side-platform pairs per preset: light=1 pair, normal=2, chaos=3
+const PRESET_TO_PAIR_LIMIT: Record<PortalPongConfigPreset, number> = {
   light: 1,
   normal: 2,
   chaos: 3
@@ -1747,36 +1748,33 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
 
     const generatePlatforms = () => {
       const platforms: Platform[] = [];
-      const pairCount = PRESET_TO_PAIRS[mergedConfig.preset] + 2;
-      // Use most of the vertical space — leave only a small gap at top
+      const pairCount = PRESET_TO_PAIR_LIMIT[mergedConfig.preset];
       const minY = 1.35;
-      const maxY = Math.max(minY + 2.0, gameHeight - 0.7);
-      // Minimum vertical separation between consecutive tiers
-      const minTierGap = (maxY - minY) / (pairCount + 1) * 0.7;
+      const maxY = Math.max(minY + 2.5, gameHeight - 0.7);
+      // Enforce wide vertical breathing room between tiers
+      const tierSpan = maxY - minY;
+      const minTierGap = tierSpan / (pairCount + 1) * 1.1;
 
-      // Low center platform — always below portal zone, helps redirect ball upward
-      platforms.push(new Platform(scene, 0, randomBetween(random, 2.2, 3.2), randomBetween(random, 1.9, 2.9), randTilt(8)));
+      // Single low center platform below portal zone
+      platforms.push(new Platform(scene, 0, randomBetween(random, 2.2, 3.0), randomBetween(random, 1.8, 2.6), randTilt(8)));
 
-      // Track last placed Y to enforce spacing
       let lastY = minY;
       for (let i = 0; i < pairCount; i++) {
         const laneT = (i + 1) / (pairCount + 1);
-        const maxWidth = THREE.MathUtils.clamp(worldHalfWidth * 0.28, 2.0, 3.4);
-        const width = randomBetween(random, 1.6, maxWidth);
-        const minX = 2.3 + laneT * 0.35;
+        const maxWidth = THREE.MathUtils.clamp(worldHalfWidth * 0.26, 1.8, 3.0);
+        const width = randomBetween(random, 1.5, maxWidth);
+        const minX = 2.5;
 
-        // Distribute tiers with a slight upward bias — upper platforms go higher
-        const rawLaneY = minY + Math.pow(laneT, 0.75) * (maxY - minY);
-        // Ensure minimum gap from previous tier
-        const clampedMin = Math.max(rawLaneY - 0.5, lastY + minTierGap);
-        const clampedMax = Math.min(rawLaneY + 0.7, maxY);
+        // Spread evenly with upward bias so top platforms actually reach the top
+        const rawLaneY = minY + Math.pow(laneT, 0.8) * tierSpan;
+        const clampedMin = Math.max(rawLaneY - 0.4, lastY + minTierGap);
+        const clampedMax = Math.min(rawLaneY + 0.6, maxY);
         const y = THREE.MathUtils.clamp(
-          randomBetween(random, clampedMin, Math.max(clampedMin + 0.1, clampedMax)),
+          randomBetween(random, clampedMin, Math.max(clampedMin + 0.05, clampedMax)),
           minY, maxY
         );
         lastY = y;
 
-        // Portal clearance: if Y overlaps the portal mouth, pull platforms back
         const inPortalZone = y + 0.3 > PORTAL_Y_MIN && y - 0.3 < PORTAL_Y_MAX;
         const portalSafeEdge = inPortalZone ? goalCenterX - PORTAL_CLEAR_DIST : worldHalfWidth;
         const maxX = Math.max(minX + 0.25, Math.min(worldHalfWidth - width / 2 - 1.0, portalSafeEdge - width / 2));
@@ -1787,13 +1785,11 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit }) => {
         platforms.push(new Platform(scene, -x, y, width, -tilt));
       }
 
-      // 1–2 high center platforms to give the upper area some action
-      const extraCenterCount = 1 + Math.floor(random() * 2);
-      for (let i = 0; i < extraCenterCount; i += 1) {
-        // Bias these toward the upper half of the world
-        const y = randomBetween(random, maxY * 0.55, maxY);
-        const width = randomBetween(random, 1.4, 2.1);
-        platforms.push(new Platform(scene, randomBetween(random, -1.1, 1.1), y, width, randTilt(10)));
+      // One optional high center platform for upper-area play
+      if (random() > 0.35) {
+        const y = randomBetween(random, maxY * 0.6, maxY);
+        const width = randomBetween(random, 1.3, 2.0);
+        platforms.push(new Platform(scene, randomBetween(random, -0.9, 0.9), y, width, randTilt(10)));
       }
       return platforms;
     };
