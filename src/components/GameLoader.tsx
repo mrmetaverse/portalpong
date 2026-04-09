@@ -1,7 +1,7 @@
 'use client'
 
 import React from 'react';
-import PortalPongGame, { PortalPongConfig, PortalPongConfigPreset } from './PortalPongGame';
+import PortalPongGame, { PortalPongConfig, PortalPongConfigPreset, WizardColorKey } from './PortalPongGame';
 
 const randomSeed = () => Math.floor(Math.random() * 1_000_000);
 const randomRoomCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -21,6 +21,17 @@ const backgrounds: PortalPongConfig['background'][] = [
   'bg5',
   'bg6',
   'bg7'
+];
+
+const wizardColorOptions: Array<{ key: WizardColorKey; label: string; preview: string }> = [
+  { key: 'teal', label: 'Teal', preview: '#14b8a6' },
+  { key: 'cyan', label: 'Cyan', preview: '#22d3ee' },
+  { key: 'lavender', label: 'Lavender', preview: '#c4b5fd' },
+  { key: 'darkPurple', label: 'Dark Purple', preview: '#6d28d9' },
+  { key: 'red', label: 'Red', preview: '#ef4444' },
+  { key: 'blue', label: 'Blue', preview: '#3b82f6' },
+  { key: 'yellow', label: 'Yellow', preview: '#facc15' },
+  { key: 'orange', label: 'Orange', preview: '#f97316' }
 ];
 
 type MenuStep = 'level' | 'color' | 'matchmaking';
@@ -44,6 +55,8 @@ const GameLoader: React.FC = () => {
     preset: 'normal',
     parallax: true,
     seed: randomSeed(),
+    player1Color: 'cyan',
+    player2Color: 'lavender',
     aiDifficulty: 1,
     mode: 'ai',
     localPlayer: 'player1',
@@ -264,21 +277,59 @@ const GameLoader: React.FC = () => {
       ) : null}
       {menuStep === 'color' ? (
         <RetroPanel title="Color Select">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 mb-4">
             <button
               type="button"
-              className={`border p-4 text-left uppercase ${portalConfig.localPlayer === 'player1' ? 'border-red-300 bg-red-900/20' : 'border-slate-600'}`}
+              className={`border p-4 text-left uppercase ${portalConfig.localPlayer === 'player1' ? 'border-cyan-300 bg-cyan-900/20' : 'border-slate-600'}`}
               onClick={() => updateConfig('localPlayer', 'player1')}
             >
-              Red Wizard
+              Local Is Left Wizard
             </button>
             <button
               type="button"
-              className={`border p-4 text-left uppercase ${portalConfig.localPlayer === 'player2' ? 'border-blue-300 bg-blue-900/20' : 'border-slate-600'}`}
+              className={`border p-4 text-left uppercase ${portalConfig.localPlayer === 'player2' ? 'border-violet-300 bg-violet-900/20' : 'border-slate-600'}`}
               onClick={() => updateConfig('localPlayer', 'player2')}
             >
-              Blue Wizard
+              Local Is Right Wizard
             </button>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="flex flex-col gap-2 text-sm">
+              <span className="text-cyan-100 uppercase text-xs">Left Wizard Color</span>
+              <select
+                className="border border-cyan-300/60 bg-slate-950 p-2 uppercase"
+                value={portalConfig.player1Color ?? 'cyan'}
+                onChange={(e) => updateConfig('player1Color', e.target.value as WizardColorKey)}
+              >
+                {wizardColorOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-2 text-sm">
+              <span className="text-cyan-100 uppercase text-xs">Right Wizard Color</span>
+              <select
+                className="border border-cyan-300/60 bg-slate-950 p-2 uppercase"
+                value={portalConfig.player2Color ?? 'lavender'}
+                onChange={(e) => updateConfig('player2Color', e.target.value as WizardColorKey)}
+              >
+                {wizardColorOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {wizardColorOptions.map((option) => (
+              <div key={option.key} className="flex items-center gap-2 border border-white/15 bg-slate-950/40 px-2 py-1 text-[10px] uppercase text-slate-300">
+                <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: option.preview }} />
+                {option.label}
+              </div>
+            ))}
           </div>
           <div className="mt-4 flex gap-2">
             <button

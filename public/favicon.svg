@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PortalPong icon">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="45%" r="70%">
+      <stop offset="0%" stop-color="#181b33"/>
+      <stop offset="100%" stop-color="#0a0b14"/>
+    </radialGradient>
+    <linearGradient id="leftPortal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff8ca3"/>
+      <stop offset="100%" stop-color="#ff4d6d"/>
+    </linearGradient>
+    <linearGradient id="rightPortal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9ec6ff"/>
+      <stop offset="100%" stop-color="#4b86ff"/>
+    </linearGradient>
+    <radialGradient id="ballGlow" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#f8f3ff"/>
+      <stop offset="100%" stop-color="#b38aff"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="url(#bgGlow)"/>
+
+  <ellipse cx="17" cy="32" rx="9.2" ry="13.2" fill="none" stroke="url(#leftPortal)" stroke-width="4.4"/>
+  <ellipse cx="47" cy="32" rx="9.2" ry="13.2" fill="none" stroke="url(#rightPortal)" stroke-width="4.4"/>
+
+  <path d="M24 31.5h16" stroke="#d8c6ff" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
+  <circle cx="32" cy="32" r="5.2" fill="url(#ballGlow)"/>
+  <circle cx="30.4" cy="30.4" r="1.2" fill="#ffffff" opacity="0.8"/>
+</svg>
