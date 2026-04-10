@@ -169,10 +169,11 @@ const LobbyScreen: React.FC<LobbyScreenProps> = ({
         body: JSON.stringify({ player2Id: player.id, player2Name: player.username, player2Color: player.color })
       });
       if (!res.ok) { setError(res.error || 'Could not join room'); return; }
-      setWaitingRoom(res.room);
-      setWaitingSide('player2');
-      setView('waiting');
-      startWaitingPoll(room.code, 'player2');
+      // Mark as playing immediately so player1's poll sees the match is ready,
+      // then launch without waiting — avoids the race where player1 sets 'playing'
+      // before player2's first poll fires.
+      await api(`/api/lobby?code=${room.code}`, { method: 'POST', body: JSON.stringify({ status: 'playing' }) });
+      launchFromRoom(res.room, 'player2');
     } catch { setError('Failed to join room'); }
   };
 
@@ -221,8 +222,8 @@ const LobbyScreen: React.FC<LobbyScreenProps> = ({
         if (!res.ok || !res.room) return;
         const room: LobbyRoom = res.room;
         setWaitingRoom(room);
-        if (room.status === 'starting' || (room.player2Id && room.status === 'waiting')) {
-          // Mark playing
+        if (room.status === 'starting' || room.status === 'playing' || (room.player2Id && room.status === 'waiting')) {
+          // Mark playing (idempotent if already set by player2)
           await api(`/api/lobby?code=${code}`, { method: 'POST', body: JSON.stringify({ status: 'playing' }) });
           clearPoll();
           launchFromRoom(room, side);
