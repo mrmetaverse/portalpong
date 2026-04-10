@@ -22,7 +22,7 @@ module.exports = async function handler(req, res) {
 
     if (req.method === "PUT") {
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-      const { player2Id, player2Name, player2Color } = body;
+      const { player2Id, player2Name, player2Color, player2Character } = body;
       if (!player2Id) return res.status(400).json({ ok: false, error: "Missing player2Id" });
       const key = `pp:lobby:${code}`;
       const room = await db.hgetall(key);
@@ -30,8 +30,11 @@ module.exports = async function handler(req, res) {
       if (room.status !== "waiting") return res.status(409).json({ ok: false, error: "Room not available" });
 
       await db.hset(key, {
-        player2Id, player2Name: String(player2Name || "Challenger").slice(0, 20),
-        player2Color: player2Color || "lavender", status: "starting"
+        player2Id,
+        player2Name: String(player2Name || "Challenger").slice(0, 20),
+        player2Color: player2Color || "lavender",
+        player2Character: String(player2Character || "wizard"),
+        status: "starting",
       });
       await db.expire(key, ROOM_TTL);
       await db.srem("pp:rooms:open", code);

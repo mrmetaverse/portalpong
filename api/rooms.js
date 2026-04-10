@@ -29,7 +29,7 @@ module.exports = async function handler(req, res) {
 
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-      const { code, hostId, hostName, hostColor, preset, background, seed, isPublic } = body;
+      const { code, hostId, hostName, hostColor, preset, background, seed, isPublic, player1Character } = body;
       if (!code || !hostId) return res.status(400).json({ ok: false, error: "Missing code or hostId" });
 
       const room = {
@@ -40,7 +40,9 @@ module.exports = async function handler(req, res) {
         isPublic: isPublic ? "1" : "0",
         status: "waiting",
         createdAt: Date.now(),
-        player1Id: hostId, player2Id: "", player2Name: "", player2Color: ""
+        player1Id: hostId, player2Id: "", player2Name: "", player2Color: "",
+        player1Character: String(player1Character || "wizard"),
+        player2Character: "",
       };
 
       await db.hset(`pp:lobby:${code}`, room);

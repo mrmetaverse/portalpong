@@ -2233,9 +2233,6 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
     let mysteryBoxNextSpawnAt = Date.now() + 15000; // first spawn 15s in
     let boxIdCounter = 0;
     let pickupIdCounter = 0;
-    // Authority score last seen from player1 (player2 uses these to detect changes)
-    let lastAuthP1Score = 0;
-    let lastAuthP2Score = 0;
     let matchEnded = false;
     let pausedForMenu = false;
     let countdownEndAt = 0;
@@ -2835,14 +2832,14 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       ball.velocity.x += (auth.ball.vx - ball.velocity.x) * LERP;
       ball.velocity.y += (auth.ball.vy - ball.velocity.y) * LERP;
 
-      // Score sync: when player1's score changes, update local and trigger celebration
-      const p1Changed = auth.score.p1 !== lastAuthP1Score;
-      const p2Changed = auth.score.p2 !== lastAuthP2Score;
-      if (p1Changed || p2Changed) {
-        lastAuthP1Score = auth.score.p1;
-        lastAuthP2Score = auth.score.p2;
-        player1ScoreLocal = auth.score.p1;
-        player2ScoreLocal = auth.score.p2;
+      // Score sync: always authoritative — compare against local to detect goals/corrections
+      const authP1 = Number(auth.score.p1) || 0;
+      const authP2 = Number(auth.score.p2) || 0;
+      const scoreIncreased = authP1 > player1ScoreLocal || authP2 > player2ScoreLocal;
+      const scoreChanged = authP1 !== player1ScoreLocal || authP2 !== player2ScoreLocal;
+      if (scoreChanged) {
+        player1ScoreLocal = authP1;
+        player2ScoreLocal = authP2;
 
         if (auth.matchEnded) {
           if (!matchEnded) {
@@ -2868,7 +2865,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
           }
         } else {
           setGameState(prev => ({ ...prev, player1Score: player1ScoreLocal, player2Score: player2ScoreLocal }));
-          beginGoalCelebration();
+          if (scoreIncreased) beginGoalCelebration();
         }
       }
 
@@ -3538,7 +3535,8 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
       // ── Mystery box spawn (player1 / offline only — player2 syncs from auth) ──
       const now = Date.now();
-      const isP2Online = mergedConfig.mode === 'matchmaking' && localRole === 'player2' && remoteConnected;
+      // player2 in matchmaking ALWAYS defers to player1's auth — no local simulation
+      const isP2Online = mergedConfig.mode === 'matchmaking' && localRole === 'player2';
       if (!isP2Online && !matchEnded && !pausedForMenu && activeMysteryBoxes.length === 0 && activePowerupPickups.length === 0 && now >= mysteryBoxNextSpawnAt) {
         const bx = (Math.random() - 0.5) * (worldHalfWidth * 1.1);
         const by = 1.8 + Math.random() * 3.2;
@@ -3550,6 +3548,9 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       activeMysteryBoxes = activeMysteryBoxes.filter(box => {
         if (box.opened) return false;
         box.update(1 / 60);
+
+        // player2 online: auth controls box lifecycle — no local interactions
+        if (isP2Online) return true;
 
         // Check explosion hits
         let hit = false;
@@ -3571,11 +3572,8 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
         if (hit) {
           const boxPos = box.group.position.clone();
           box.open();
-          // Only player1 (or offline) spawns new pickups; player2 syncs them from auth
-          if (!isP2Online) {
-            const randomType = ALL_POWERUPS[Math.floor(Math.random() * ALL_POWERUPS.length)];
-            activePowerupPickups.push(new PowerupPickup(scene, boxPos, randomType, pickupIdCounter++));
-          }
+          const randomType = ALL_POWERUPS[Math.floor(Math.random() * ALL_POWERUPS.length)];
+          activePowerupPickups.push(new PowerupPickup(scene, boxPos, randomType, pickupIdCounter++));
           return false;
         }
         return true;
@@ -3585,11 +3583,12 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       activePowerupPickups = activePowerupPickups.filter(pickup => {
         if (pickup.collected) return false;
         pickup.update(1 / 60);
+        // player2 online: auth controls pickup lifecycle — no local collections or expiry
+        if (isP2Online) return true;
         for (const p of [player1, player2]) {
           if (p.mesh.position.distanceTo(pickup.mesh.position) < 0.62) {
             pickup.collect();
             p.grantPowerup(pickup.type);
-            // Teleport powerup changes castSpell behavior, handled in controller
             return false;
           }
         }

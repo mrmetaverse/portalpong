@@ -398,12 +398,15 @@ const GameLoader: React.FC = () => {
     config: PortalPongConfig,
     matchInfo: typeof pendingMatchInfo
   ) => {
+    const side = matchInfo?.side ?? 'player1';
     const withIds = {
       ...config,
       player1Id: matchInfo?.player1Id ?? player.id,
       player2Id: matchInfo?.player2Id ?? '',
-      player1Character: p1Character,
-      player2Character: p2Character,
+      // For matchmaking: characters come from room data via config.
+      // Fall back to local wizard choices if room data missing.
+      player1Character: config.player1Character ?? (side === 'player1' ? p1Character : 'wizard'),
+      player2Character: config.player2Character ?? (side === 'player2' ? p1Character : p2Character),
     };
     setPortalConfig(withIds);
     setPendingMatchInfo(matchInfo);

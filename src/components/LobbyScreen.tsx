@@ -23,6 +23,7 @@ export interface LobbyRoom {
   isPublic: string;
   player1Id: string; player2Id: string;
   player2Name: string; player2Color: string;
+  player1Character?: string; player2Character?: string;
   createdAt: number;
 }
 
@@ -166,7 +167,12 @@ const LobbyScreen: React.FC<LobbyScreenProps> = ({
     try {
       const res = await api(`/api/lobby?code=${room.code}`, {
         method: 'PUT',
-        body: JSON.stringify({ player2Id: player.id, player2Name: player.username, player2Color: player.color })
+        body: JSON.stringify({
+          player2Id: player.id,
+          player2Name: player.username,
+          player2Color: player.color,
+          player2Character: preConfigured?.player1Character ?? 'wizard',
+        })
       });
       if (!res.ok) { setError(res.error || 'Could not join room'); return; }
       // Mark as playing immediately so player1's poll sees the match is ready,
@@ -188,7 +194,17 @@ const LobbyScreen: React.FC<LobbyScreenProps> = ({
     try {
       const res = await api('/api/rooms', {
         method: 'POST',
-        body: JSON.stringify({ code, hostId: player.id, hostName: player.username, hostColor: player.color, preset, background, seed, isPublic: createPublic })
+        body: JSON.stringify({
+          code,
+          hostId: player.id,
+          hostName: player.username,
+          hostColor: player.color,
+          preset,
+          background,
+          seed,
+          isPublic: createPublic,
+          player1Character: preConfigured?.player1Character ?? 'wizard',
+        })
       });
       if (!res.ok) { setError(res.error || 'Could not create room'); setCreating(false); return; }
       setWaitingRoom(res.room);
@@ -244,9 +260,9 @@ const LobbyScreen: React.FC<LobbyScreenProps> = ({
       mode: 'matchmaking',
       localPlayer: side,
       matchmakingRoom: room.code,
-      // Carry character choices from the wizard
-      player1Character: preConfigured?.player1Character,
-      player2Character: preConfigured?.player2Character,
+      // Characters come from room data (stored at create/join time)
+      player1Character: (room.player1Character as PortalPongConfig['player1Character']) ?? preConfigured?.player1Character ?? 'wizard',
+      player2Character: (room.player2Character as PortalPongConfig['player2Character']) ?? preConfigured?.player2Character ?? 'wizard',
     };
     onLaunch(config, {
       roomCode: room.code, side,
