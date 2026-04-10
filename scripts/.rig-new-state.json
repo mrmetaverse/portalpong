@@ -1,0 +1,20 @@
+{
+  "wizard_remesh": "019d74cb-2f90-7e73-9f09-484e18458bab",
+  "wizard_rig": "019d74cb-9c98-7d1f-a9e0-835532aa9a84",
+  "wizard_anim_idle": "019d74cc-1436-7d3d-ac76-b4ec9467d374",
+  "wizard_anim_jump": "019d74cc-3fd5-7ece-b588-28acb0e7f4d7",
+  "wizard_anim_cast": "019d74cc-6af1-7d41-a99f-393ca1650b4a",
+  "wizard_anim_hit": "019d74cc-8102-7ea6-bdd4-00febb9f4bfc",
+  "knight_remesh": "019d74cc-abf0-7f04-b37f-fd171243c23b",
+  "knight_rig": "019d74cd-96bf-7ecc-97e0-6c367877b809",
+  "knight_anim_idle": "019d74ce-248b-7da6-acde-da3a7f68cd69",
+  "knight_anim_jump": "019d74ce-50b1-7edd-846b-04d745582a09",
+  "knight_anim_cast": "019d74ce-7bd0-7dc4-9e16-3fad6bfffc95",
+  "knight_anim_hit": "019d74ce-9200-7808-bca1-575adf5b0952",
+  "archer_remesh": "019d74ce-a807-7dcc-adef-efb6d8829b17",
+  "archer_rig": "019d74cf-a744-7824-8aab-98b63079df1e",
+  "archer_anim_idle": "019d74d0-1f95-7f32-aec5-c594277c284e",
+  "archer_anim_jump": "019d74d0-4aaa-7f61-b9b7-995efb41547a",
+  "archer_anim_cast": "019d74d0-75bc-7f40-9992-c040f6fd7af3",
+  "archer_anim_hit": "019d74d0-8c10-7f40-9e8b-0510cfc0df44"
+}

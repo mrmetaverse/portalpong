@@ -1,6 +1,6 @@
 // PortalPong – Character definitions, stats, and rock-paper-scissors advantages
 
-export type CharacterType = 'wizard' | 'knight' | 'rogue' | 'witch' | 'berserker' | 'sage';
+export type CharacterType = 'wizard' | 'knight' | 'rogue' | 'witch' | 'berserker' | 'sage' | 'archer';
 
 export interface CharacterStats {
   /** Base movement speed multiplier */
@@ -90,7 +90,7 @@ export const CHARACTERS: Record<CharacterType, CharacterDef> = {
       'Wields explosive spells with high power and a fast cooldown, but is fragile. The Witch turns the arena into a minefield for those who chase her.',
     stats: { speed: 1.15, jump: 1.05, power: 1.6, size: 0.9, defense: 0.75, cooldown: 0.7 },
     strongAgainst: ['rogue', 'wizard'],
-    weakAgainst: ['knight', 'berserker'],
+    weakAgainst: ['knight', 'archer'],
     themeColor: '#22c55e',
     accentColor: '#fbbf24',
     modelPath: '/models/witch.glb',
@@ -118,10 +118,24 @@ export const CHARACTERS: Record<CharacterType, CharacterDef> = {
       'The Sage floats and leaps to incredible heights, making them nearly untouchable in the air. Their spells are measured but precise. Masters require patience.',
     stats: { speed: 0.8, jump: 2.0, power: 0.85, size: 1.0, defense: 1.3, cooldown: 0.9 },
     strongAgainst: ['rogue', 'knight'],
-    weakAgainst: ['berserker', 'witch'],
+    weakAgainst: ['berserker', 'archer'],
     themeColor: '#f0abfc',
     accentColor: '#fde68a',
     modelPath: '/models/sage.glb',
+  },
+
+  archer: {
+    id: 'archer',
+    name: 'Archer',
+    tagline: 'Death from a distance',
+    description:
+      'A medieval longbow specialist who fires fast, piercing arrows across the arena. The Archer controls space with rapid volleys but crumbles in close combat.',
+    stats: { speed: 1.1, jump: 1.15, power: 0.75, size: 0.95, defense: 0.65, cooldown: 0.55 },
+    strongAgainst: ['sage', 'witch'],
+    weakAgainst: ['knight', 'berserker'],
+    themeColor: '#84cc16',
+    accentColor: '#a3e635',
+    modelPath: '/models/archer.glb',
   },
 };
 

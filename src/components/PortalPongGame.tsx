@@ -219,7 +219,7 @@ class Platform {
   }
 }
 
-type ProjectileStyle = 'magic' | 'axe' | 'slash' | 'disk';
+type ProjectileStyle = 'magic' | 'axe' | 'slash' | 'disk' | 'arrow';
 
 class Spell {
   mesh: THREE.Mesh;
@@ -297,6 +297,20 @@ class Spell {
         material = new THREE.MeshBasicMaterial({ color: headCol, transparent: true, opacity: 1.0 });
         break;
       }
+      case 'arrow': {
+        const arrowShape = new THREE.Shape();
+        arrowShape.moveTo(0.22, 0);
+        arrowShape.lineTo(-0.12, 0.025);
+        arrowShape.lineTo(-0.18, 0.015);
+        arrowShape.lineTo(-0.18, -0.015);
+        arrowShape.lineTo(-0.12, -0.025);
+        arrowShape.closePath();
+        geometry = new THREE.ExtrudeGeometry(arrowShape, { depth: 0.02, bevelEnabled: false });
+        geometry.center();
+        const arrowCol = headCol.clone().lerp(new THREE.Color(0xffffff), 0.2);
+        material = new THREE.MeshBasicMaterial({ color: arrowCol, transparent: true, opacity: 1.0 });
+        break;
+      }
       default: {
         geometry = new THREE.SphereGeometry(0.12, 12, 12);
         material = new THREE.MeshBasicMaterial({ color: headCol, transparent: true, opacity: 1.0 });
@@ -314,7 +328,8 @@ class Spell {
     this.target = target.clone();
     const toTarget = this.target.clone().sub(this.mesh.position);
     const targetDirection = toTarget.lengthSq() > 0.0001 ? toTarget.normalize() : normalizedDirection;
-    this.velocity = targetDirection.multiplyScalar(0.36);
+    const speed = projectileStyle === 'arrow' ? 0.52 : 0.36;
+    this.velocity = targetDirection.multiplyScalar(speed);
 
     // Orient non-magic projectiles toward travel direction
     if (projectileStyle !== 'magic') {
@@ -442,7 +457,7 @@ class Spell {
       }
     }
     
-    this.velocity.y -= 0.002;
+    this.velocity.y -= this.projectileStyle === 'arrow' ? 0.0008 : 0.002;
     this.mesh.position.add(this.velocity);
     this.tailPoints.unshift(this.mesh.position.clone());
     if (this.tailPoints.length > this.tailMeshes.length) {
@@ -467,6 +482,10 @@ class Spell {
       const travelAngle = Math.atan2(this.velocity.y, this.velocity.x);
       this.mesh.rotation.z = travelAngle + Math.sin(this.age * 0.3) * 0.15;
       this.mesh.scale.setScalar(1.0 + Math.sin(this.age * 0.4) * 0.1);
+    } else if (style === 'arrow') {
+      // Arrow: always points in flight direction, no spin
+      const travelAngle = Math.atan2(this.velocity.y, this.velocity.x);
+      this.mesh.rotation.z = travelAngle;
     }
 
     // Magic style: snake-wiggle tail
@@ -507,6 +526,8 @@ class Spell {
         pGeo = new THREE.PlaneGeometry(0.04 + Math.random() * 0.03, 0.01);
       } else if (style === 'disk') {
         pGeo = new THREE.RingGeometry(0.01, 0.025 + Math.random() * 0.015, 6);
+      } else if (style === 'arrow') {
+        pGeo = new THREE.ConeGeometry(0.012, 0.04 + Math.random() * 0.02, 4);
       } else {
         pGeo = new THREE.SphereGeometry(0.025 + Math.random() * 0.02, 5, 5);
       }
@@ -1392,6 +1413,7 @@ class Player {
       case 'berserker': return 'axe';
       case 'knight':    return 'slash';
       case 'rogue':     return 'disk';
+      case 'archer':    return 'arrow';
       default:          return 'magic';
     }
   }
