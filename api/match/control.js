@@ -13,7 +13,7 @@ module.exports = async function handler(req, res) {
   try {
     const db = getRedis();
     const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
-    const { room, player, input, jumpSeq, castSeq, sentAt } = body;
+    const { room, player, input, jumpSeq, castSeq, sentAt, auth } = body;
 
     if (!room || (player !== "player1" && player !== "player2") || !input) {
       return res.status(400).json({ ok: false, error: "Invalid payload" });
@@ -27,17 +27,25 @@ module.exports = async function handler(req, res) {
       right: Boolean(input.right),
       down: Boolean(input.down),
       jumpHeld: Boolean(input.jumpHeld),
+      shieldHeld: Boolean(input.shieldHeld),
       aimX: Number(input.aimX) || 0,
       aimY: Number(input.aimY) || 0
     };
 
-    const value = JSON.stringify({
+    const frame = {
       input: safeInput,
       jumpSeq: Number(jumpSeq) || 0,
       castSeq: Number(castSeq) || 0,
       sentAt: Number(sentAt) || Date.now(),
-      serverTime: Date.now()
-    });
+      serverTime: Date.now(),
+    };
+
+    // Pass through player1's authority state unchanged so player2 can sync
+    if (auth && typeof auth === "object") {
+      frame.auth = auth;
+    }
+
+    const value = JSON.stringify(frame);
 
     const key = `portalpong:room:${normalizedRoom}`;
     await db.hset(key, { [player]: value });

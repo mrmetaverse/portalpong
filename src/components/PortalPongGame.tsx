@@ -78,6 +78,17 @@ interface PortalVisual {
   pulseOffset: number;
 }
 
+// Sent by player1 to synchronize authoritative game state with player2
+interface AuthorityState {
+  ball: { x: number; y: number; vx: number; vy: number };
+  score: { p1: number; p2: number };
+  celebrating: boolean;
+  matchEnded: boolean;
+  winner: 1 | 2 | null;
+  boxes: Array<{ id: number; x: number; y: number }>;
+  pickups: Array<{ id: number; x: number; y: number; type: string }>;
+}
+
 interface ControllerFrame {
   left: boolean;
   right: boolean;
@@ -1553,11 +1564,13 @@ class MysteryBox {
   openAge: number;
   scene: THREE.Scene;
   position: THREE.Vector3;
+  id: number;
 
-  constructor(scene: THREE.Scene, x: number, y: number) {
+  constructor(scene: THREE.Scene, x: number, y: number, id = 0) {
     this.scene = scene;
     this.opened = false;
     this.openAge = 0;
+    this.id = id;
     this.position = new THREE.Vector3(x, y, 0);
 
     this.material = new THREE.ShaderMaterial({
@@ -1648,13 +1661,15 @@ class PowerupPickup {
   scene: THREE.Scene;
   labelSprite: THREE.Sprite;
   _modelGroup?: THREE.Group;
+  id: number;
 
-  constructor(scene: THREE.Scene, position: THREE.Vector3, type: PowerupType) {
+  constructor(scene: THREE.Scene, position: THREE.Vector3, type: PowerupType, id = 0) {
     this.scene = scene;
     this.type = type;
     this.position = position.clone();
     this.collected = false;
     this.age = 0;
+    this.id = id;
 
     const color = POWERUP_COLORS[type];
     const geo = new THREE.OctahedronGeometry(0.28, 0);
@@ -2216,6 +2231,11 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
     let activeMysteryBoxes: MysteryBox[] = [];
     let activePowerupPickups: PowerupPickup[] = [];
     let mysteryBoxNextSpawnAt = Date.now() + 15000; // first spawn 15s in
+    let boxIdCounter = 0;
+    let pickupIdCounter = 0;
+    // Authority score last seen from player1 (player2 uses these to detect changes)
+    let lastAuthP1Score = 0;
+    let lastAuthP2Score = 0;
     let matchEnded = false;
     let pausedForMenu = false;
     let countdownEndAt = 0;
@@ -2782,6 +2802,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       input: Pick<ControllerFrame, 'left' | 'right' | 'down' | 'jumpHeld' | 'shieldHeld' | 'aimX' | 'aimY'>;
       jumpSeq: number;
       castSeq: number;
+      auth?: AuthorityState;
     }) => {
       remoteLastSeenAt = performance.now();
       remoteInput.left = payload.input.left;
@@ -2798,6 +2819,85 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       if (payload.castSeq > remoteCastSeq) {
         remoteInput.castQueued = true;
         remoteCastSeq = payload.castSeq;
+      }
+
+      // ── Apply player1 authority state (only when we are player2) ──────────────
+      if (localRole !== 'player2' || !payload.auth) return;
+      const auth = payload.auth;
+
+      // Ball sync: lerp toward player1's ball, snap on large divergence
+      const dx = auth.ball.x - ball.mesh.position.x;
+      const dy = auth.ball.y - ball.mesh.position.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const LERP = dist > 2.5 ? 1 : 0.35;
+      ball.mesh.position.x += dx * LERP;
+      ball.mesh.position.y += dy * LERP;
+      ball.velocity.x += (auth.ball.vx - ball.velocity.x) * LERP;
+      ball.velocity.y += (auth.ball.vy - ball.velocity.y) * LERP;
+
+      // Score sync: when player1's score changes, update local and trigger celebration
+      const p1Changed = auth.score.p1 !== lastAuthP1Score;
+      const p2Changed = auth.score.p2 !== lastAuthP2Score;
+      if (p1Changed || p2Changed) {
+        lastAuthP1Score = auth.score.p1;
+        lastAuthP2Score = auth.score.p2;
+        player1ScoreLocal = auth.score.p1;
+        player2ScoreLocal = auth.score.p2;
+
+        if (auth.matchEnded) {
+          if (!matchEnded) {
+            matchEnded = true;
+            setRoundCountdownText(null);
+            setGoalCelebrationActive(false);
+            const w = auth.winner ?? 1;
+            setGameState(prev => ({
+              ...prev,
+              player1Score: player1ScoreLocal,
+              player2Score: player2ScoreLocal,
+              gameStatus: 'ended',
+              winner: w === 1 ? 'red' : 'blue',
+            }));
+            onMatchEnd?.({
+              winner: w,
+              p1Score: player1ScoreLocal,
+              p2Score: player2ScoreLocal,
+              isVsAi: false,
+              player1Id: mergedConfig.player1Id || '',
+              player2Id: mergedConfig.player2Id || '',
+            });
+          }
+        } else {
+          setGameState(prev => ({ ...prev, player1Score: player1ScoreLocal, player2Score: player2ScoreLocal }));
+          beginGoalCelebration();
+        }
+      }
+
+      // Mystery box sync: create/remove to match player1's list
+      const authBoxIds = new Set(auth.boxes.map(b => b.id));
+      activeMysteryBoxes = activeMysteryBoxes.filter(b => {
+        if (!authBoxIds.has(b.id)) { b.cleanup(); return false; }
+        return true;
+      });
+      const localBoxIds = new Set(activeMysteryBoxes.map(b => b.id));
+      for (const ab of auth.boxes) {
+        if (!localBoxIds.has(ab.id)) {
+          activeMysteryBoxes.push(new MysteryBox(scene, ab.x, ab.y, ab.id));
+        }
+      }
+
+      // Powerup pickup sync: create/remove to match player1's list
+      const authPickupIds = new Set(auth.pickups.map(p => p.id));
+      activePowerupPickups = activePowerupPickups.filter(p => {
+        if (!authPickupIds.has(p.id)) { p.collect(); return false; }
+        return true;
+      });
+      const localPickupIds = new Set(activePowerupPickups.map(p => p.id));
+      for (const ap of auth.pickups) {
+        if (!localPickupIds.has(ap.id)) {
+          activePowerupPickups.push(
+            new PowerupPickup(scene, new THREE.Vector3(ap.x, ap.y, 0), ap.type as PowerupType, ap.id)
+          );
+        }
       }
     };
 
@@ -3210,7 +3310,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
         if (shouldSend) {
           networkSendBusy = true;
           lastNetworkSendAt = nowMs;
-          const payload = {
+          const payload: Record<string, unknown> = {
             room: roomCode,
             player: localRole,
             input: {
@@ -3226,6 +3326,23 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
             castSeq: localCastSeq,
             sentAt: Date.now()
           };
+          // Player1 is the authority for ball / score / items — broadcast state every frame
+          if (localRole === 'player1') {
+            payload.auth = {
+              ball: {
+                x: ball.mesh.position.x,
+                y: ball.mesh.position.y,
+                vx: ball.velocity.x,
+                vy: ball.velocity.y,
+              },
+              score: { p1: player1ScoreLocal, p2: player2ScoreLocal },
+              celebrating: goalCelebrationEndAt > nowMs || roundCountdownEndAt > nowMs || pendingRoundCountdownAfterGoal,
+              matchEnded,
+              winner: matchEnded ? (player1ScoreLocal >= WIN_SCORE ? 1 : 2) : null,
+              boxes: activeMysteryBoxes.map(b => ({ id: b.id, x: b.group.position.x, y: b.group.position.y })),
+              pickups: activePowerupPickups.map(p => ({ id: p.id, x: p.mesh.position.x, y: p.mesh.position.y, type: p.type })),
+            };
+          }
           fetch('/api/match/control', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3243,7 +3360,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
           fetch(`/api/match/state?room=${encodeURIComponent(roomCode)}`)
             .then((response) => response.ok ? response.json() : null)
             .then((payload: {
-              player1: null | { input: ControllerFrame; jumpSeq: number; castSeq: number };
+              player1: null | { input: ControllerFrame; jumpSeq: number; castSeq: number; auth?: AuthorityState };
               player2: null | { input: ControllerFrame; jumpSeq: number; castSeq: number };
             } | null) => {
               if (!payload) {
@@ -3263,7 +3380,8 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
                     aimY: Number(remotePayload.input.aimY) || 0
                   },
                   jumpSeq: Number(remotePayload.jumpSeq) || 0,
-                  castSeq: Number(remotePayload.castSeq) || 0
+                  castSeq: Number(remotePayload.castSeq) || 0,
+                  auth: (remotePayload as { auth?: AuthorityState }).auth,
                 });
               }
             })
@@ -3418,12 +3536,13 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
         });
       });
 
-      // ── Mystery box spawn ──────────────────────────────────────────────────
+      // ── Mystery box spawn (player1 / offline only — player2 syncs from auth) ──
       const now = Date.now();
-      if (!matchEnded && !pausedForMenu && activeMysteryBoxes.length === 0 && activePowerupPickups.length === 0 && now >= mysteryBoxNextSpawnAt) {
+      const isP2Online = mergedConfig.mode === 'matchmaking' && localRole === 'player2' && remoteConnected;
+      if (!isP2Online && !matchEnded && !pausedForMenu && activeMysteryBoxes.length === 0 && activePowerupPickups.length === 0 && now >= mysteryBoxNextSpawnAt) {
         const bx = (Math.random() - 0.5) * (worldHalfWidth * 1.1);
         const by = 1.8 + Math.random() * 3.2;
-        activeMysteryBoxes.push(new MysteryBox(scene, bx, by));
+        activeMysteryBoxes.push(new MysteryBox(scene, bx, by, boxIdCounter++));
         mysteryBoxNextSpawnAt = now + (20000 + Math.random() * 20000);
       }
 
@@ -3452,8 +3571,11 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
         if (hit) {
           const boxPos = box.group.position.clone();
           box.open();
-          const randomType = ALL_POWERUPS[Math.floor(Math.random() * ALL_POWERUPS.length)];
-          activePowerupPickups.push(new PowerupPickup(scene, boxPos, randomType));
+          // Only player1 (or offline) spawns new pickups; player2 syncs them from auth
+          if (!isP2Online) {
+            const randomType = ALL_POWERUPS[Math.floor(Math.random() * ALL_POWERUPS.length)];
+            activePowerupPickups.push(new PowerupPickup(scene, boxPos, randomType, pickupIdCounter++));
+          }
           return false;
         }
         return true;
@@ -3478,35 +3600,38 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
       const ballX = ball.mesh.position.x;
       const ballY = ball.mesh.position.y;
-      
-      if (ballX < -goalTriggerX && ballY > 1.45 && ballY < 3.45) {
-        player2ScoreLocal += 1;
-        if (player2ScoreLocal >= WIN_SCORE) {
-          matchEnded = true;
-          setRoundCountdownText(null);
-          setGoalCelebrationActive(false);
-          setGameState((prev) => ({ ...prev, player2Score: player2ScoreLocal, gameStatus: 'ended', winner: 'blue' }));
-          onMatchEnd?.({ winner: 2, p1Score: player1ScoreLocal, p2Score: player2ScoreLocal, isVsAi: mergedConfig.mode !== 'matchmaking', player1Id: mergedConfig.player1Id || '', player2Id: mergedConfig.player2Id || '' });
-        } else {
-          setGameState((prev) => ({ ...prev, player2Score: player2ScoreLocal }));
-          beginGoalCelebration();
+
+      // Goal detection — player2 in online matchmaking defers entirely to player1's auth state
+      if (!isP2Online) {
+        if (ballX < -goalTriggerX && ballY > 1.45 && ballY < 3.45) {
+          player2ScoreLocal += 1;
+          if (player2ScoreLocal >= WIN_SCORE) {
+            matchEnded = true;
+            setRoundCountdownText(null);
+            setGoalCelebrationActive(false);
+            setGameState((prev) => ({ ...prev, player2Score: player2ScoreLocal, gameStatus: 'ended', winner: 'blue' }));
+            onMatchEnd?.({ winner: 2, p1Score: player1ScoreLocal, p2Score: player2ScoreLocal, isVsAi: mergedConfig.mode !== 'matchmaking', player1Id: mergedConfig.player1Id || '', player2Id: mergedConfig.player2Id || '' });
+          } else {
+            setGameState((prev) => ({ ...prev, player2Score: player2ScoreLocal }));
+            beginGoalCelebration();
+          }
+          return;
         }
-        return;
-      }
-      
-      if (ballX > goalTriggerX && ballY > 1.45 && ballY < 3.45) {
-        player1ScoreLocal += 1;
-        if (player1ScoreLocal >= WIN_SCORE) {
-          matchEnded = true;
-          setRoundCountdownText(null);
-          setGoalCelebrationActive(false);
-          setGameState((prev) => ({ ...prev, player1Score: player1ScoreLocal, gameStatus: 'ended', winner: 'red' }));
-          onMatchEnd?.({ winner: 1, p1Score: player1ScoreLocal, p2Score: player2ScoreLocal, isVsAi: mergedConfig.mode !== 'matchmaking', player1Id: mergedConfig.player1Id || '', player2Id: mergedConfig.player2Id || '' });
-        } else {
-          setGameState((prev) => ({ ...prev, player1Score: player1ScoreLocal }));
-          beginGoalCelebration();
+
+        if (ballX > goalTriggerX && ballY > 1.45 && ballY < 3.45) {
+          player1ScoreLocal += 1;
+          if (player1ScoreLocal >= WIN_SCORE) {
+            matchEnded = true;
+            setRoundCountdownText(null);
+            setGoalCelebrationActive(false);
+            setGameState((prev) => ({ ...prev, player1Score: player1ScoreLocal, gameStatus: 'ended', winner: 'red' }));
+            onMatchEnd?.({ winner: 1, p1Score: player1ScoreLocal, p2Score: player2ScoreLocal, isVsAi: mergedConfig.mode !== 'matchmaking', player1Id: mergedConfig.player1Id || '', player2Id: mergedConfig.player2Id || '' });
+          } else {
+            setGameState((prev) => ({ ...prev, player1Score: player1ScoreLocal }));
+            beginGoalCelebration();
+          }
+          return;
         }
-        return;
       }
 
       // Update local player powerup HUD ~6× per second
