@@ -1,4 +1,4 @@
-const { getRedis } = require("../_redis");
+const { getRedis, resetRedis } = require("../_redis");
 
 const parsePlayerFrame = (raw) => {
   if (!raw || typeof raw !== "string") return null;
@@ -26,6 +26,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ ok: true, room, serverTime: Date.now(), player1, player2 });
   } catch (err) {
     console.error("match/state API error:", err);
+    resetRedis();
     return res.status(200).json({ ok: true, room: req.query.room, serverTime: Date.now(), player1: null, player2: null, _offline: true });
   }
 };

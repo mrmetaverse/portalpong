@@ -3,6 +3,8 @@ const { Redis } = require("@upstash/redis");
 let redis;
 let warnedAboutLocalFallback = false;
 
+// ─── Local in-memory fallback (no Redis available) ────────────────────────────
+
 class LocalRedisFallback {
   constructor() {
     this.kv = new Map();
@@ -179,24 +181,118 @@ class LocalRedisFallback {
   }
 }
 
-function deriveRestConfigFromRedisUrl() {
-  const redisUrl = process.env.REDIS_URL || process.env.KV_URL || "";
-  if (!redisUrl) return null;
-  try {
-    const parsed = new URL(redisUrl);
-    const token = decodeURIComponent(parsed.password || "");
-    const host = parsed.hostname || "";
-    if (!token || !host) return null;
-    return {
-      url: `https://${host}`,
-      token,
-    };
-  } catch {
-    return null;
+// ─── ioredis adapter — same interface as @upstash/redis ───────────────────────
+// Wraps a standard TCP Redis connection to expose the Upstash-style API that
+// the rest of the codebase depends on.
+
+class IoRedisAdapter {
+  constructor(client) {
+    this._client = client;
+  }
+
+  async hset(key, fields) {
+    const flat = [];
+    for (const [k, v] of Object.entries(fields || {})) {
+      flat.push(k, v == null ? "" : String(v));
+    }
+    if (flat.length === 0) return 0;
+    return this._client.hset(key, ...flat);
+  }
+
+  async hgetall(key) {
+    const data = await this._client.hgetall(key);
+    if (!data || Object.keys(data).length === 0) return null;
+    return data;
+  }
+
+  async hincrby(key, field, amount) {
+    return this._client.hincrby(key, field, Number(amount) || 0);
+  }
+
+  async expire(key, seconds) {
+    return this._client.expire(key, Number(seconds) || 0);
+  }
+
+  async sadd(key, member) {
+    return this._client.sadd(key, String(member));
+  }
+
+  async srem(key, member) {
+    return this._client.srem(key, String(member));
+  }
+
+  async smembers(key) {
+    return this._client.smembers(key);
+  }
+
+  async del(key) {
+    return this._client.del(key);
+  }
+
+  async get(key) {
+    return this._client.get(key);
+  }
+
+  async set(key, value, opts) {
+    const val = typeof value === "string" ? value : JSON.stringify(value);
+    if (opts && typeof opts.ex === "number") {
+      return this._client.set(key, val, "EX", opts.ex);
+    }
+    return this._client.set(key, val);
+  }
+
+  async exists(key) {
+    return this._client.exists(key);
+  }
+
+  // Upstash zadd takes { score, member }; ioredis takes (key, score, member)
+  async zadd(key, payload) {
+    return this._client.zadd(key, Number(payload.score) || 0, String(payload.member));
+  }
+
+  async zrem(key, member) {
+    return this._client.zrem(key, String(member));
+  }
+
+  async zrangebyscore(key, min, max, opts = {}) {
+    if (opts && typeof opts.count === "number") {
+      return this._client.zrangebyscore(key, min, max, "LIMIT", 0, opts.count);
+    }
+    return this._client.zrangebyscore(key, min, max);
+  }
+
+  // Upstash zrange supports { rev, withScores }; map to ioredis equivalents
+  async zrange(key, start, stop, opts = {}) {
+    if (opts.rev && opts.withScores) {
+      const raw = await this._client.zrevrange(key, start, stop, "WITHSCORES");
+      return raw || [];
+    }
+    if (opts.rev) {
+      return this._client.zrevrange(key, start, stop);
+    }
+    if (opts.withScores) {
+      const raw = await this._client.zrange(key, start, stop, "WITHSCORES");
+      return raw || [];
+    }
+    return this._client.zrange(key, start, stop);
+  }
+
+  async ping() {
+    return this._client.ping();
+  }
+
+  quit() {
+    return this._client.quit();
   }
 }
 
-function getRedisConfig() {
+// ─── Config detection ─────────────────────────────────────────────────────────
+
+function isTcpRedisUrl(url) {
+  return url.startsWith("redis://") || url.startsWith("rediss://");
+}
+
+function getUpstashConfig() {
   const url =
     process.env.KV_REST_API_URL ||
     process.env.UPSTASH_REDIS_REST_URL ||
@@ -205,29 +301,102 @@ function getRedisConfig() {
     process.env.KV_REST_API_TOKEN ||
     process.env.UPSTASH_REDIS_REST_TOKEN ||
     "";
+  if (url && token) return { url, token };
 
-  if (url && token) {
-    return { url, token };
+  // Derive REST config from REDIS_URL only if it looks like an Upstash host
+  const redisUrl = process.env.REDIS_URL || process.env.KV_URL || "";
+  if (redisUrl && isTcpRedisUrl(redisUrl)) {
+    try {
+      const parsed = new URL(redisUrl);
+      const host = parsed.hostname || "";
+      if (host.endsWith(".upstash.io")) {
+        const tok = decodeURIComponent(parsed.password || "");
+        if (tok && host) return { url: `https://${host}`, token: tok };
+      }
+    } catch {
+      // ignore
+    }
   }
-  return deriveRestConfigFromRedisUrl();
+  return null;
+}
+
+function getTcpRedisUrl() {
+  const url = process.env.REDIS_URL || process.env.KV_URL || "";
+  if (url && isTcpRedisUrl(url)) return url;
+  return null;
+}
+
+// ─── Client factory ───────────────────────────────────────────────────────────
+
+const REDIS_OP_TIMEOUT_MS = 2500;
+
+function withTimeouts(client) {
+  return new Proxy(client, {
+    get(target, prop) {
+      const val = target[prop];
+      if (typeof val !== "function") return val;
+      return function (...args) {
+        const result = val.apply(target, args);
+        if (result && typeof result.then === "function") {
+          return Promise.race([
+            result,
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`Redis op '${String(prop)}' timed out after ${REDIS_OP_TIMEOUT_MS}ms`)),
+                REDIS_OP_TIMEOUT_MS
+              )
+            ),
+          ]);
+        }
+        return result;
+      };
+    },
+  });
 }
 
 function getRedis() {
   if (!redis) {
-    const config = getRedisConfig();
-    if (config) {
-      redis = new Redis(config);
-    } else {
-      redis = new LocalRedisFallback();
-      if (!warnedAboutLocalFallback) {
-        warnedAboutLocalFallback = true;
-        console.warn(
-          "Redis config missing; using in-memory fallback for local/offline API behavior."
-        );
+    const upstashConfig = getUpstashConfig();
+    if (upstashConfig) {
+      redis = withTimeouts(new Redis(upstashConfig));
+      return redis;
+    }
+
+    const tcpUrl = getTcpRedisUrl();
+    if (tcpUrl) {
+      try {
+        const IoRedis = require("ioredis");
+        const client = new IoRedis(tcpUrl, {
+          connectTimeout: 3000,
+          commandTimeout: 2000,
+          maxRetriesPerRequest: 1,
+        });
+        client.on("error", () => {
+          // Suppress ioredis error events so they don't crash the process.
+        });
+        redis = withTimeouts(new IoRedisAdapter(client));
+        return redis;
+      } catch (err) {
+        console.error("Failed to create ioredis client:", err.message);
       }
+    }
+
+    redis = new LocalRedisFallback();
+    if (!warnedAboutLocalFallback) {
+      warnedAboutLocalFallback = true;
+      console.warn(
+        "Redis config missing; using in-memory fallback for local/offline API behavior."
+      );
     }
   }
   return redis;
 }
 
-module.exports = { getRedis };
+function resetRedis() {
+  if (redis && typeof redis.quit === "function") {
+    try { redis.quit(); } catch { /* ignore */ }
+  }
+  redis = null;
+}
+
+module.exports = { getRedis, resetRedis };

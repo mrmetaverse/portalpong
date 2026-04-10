@@ -1,4 +1,4 @@
-const { getRedis } = require("./_redis");
+const { getRedis, resetRedis } = require("./_redis");
 
 const TOP_N = 10;
 
@@ -45,6 +45,7 @@ module.exports = async function handler(req, res) {
     });
   } catch (err) {
     console.error("leaderboard API error:", err);
+    resetRedis();
     return res.status(200).json({ ok: true, leaderboards: { winsAll: [], goalsAll: [], winsPvp: [], goalsPvp: [] }, _offline: true });
   }
 };

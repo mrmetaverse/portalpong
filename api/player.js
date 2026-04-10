@@ -1,4 +1,4 @@
-const { getRedis } = require("./_redis");
+const { getRedis, resetRedis } = require("./_redis");
 
 const PLAYER_TTL = 60 * 60 * 24 * 365;
 
@@ -46,6 +46,7 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   } catch (err) {
     console.error("player API error:", err);
+    resetRedis();
     if (req.method === "GET") {
       return res.status(200).json({ ok: true, player: null, _offline: true });
     }

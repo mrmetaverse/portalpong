@@ -1,4 +1,4 @@
-const { getRedis } = require("./_redis");
+const { getRedis, resetRedis } = require("./_redis");
 
 const ROOM_TTL = 60 * 60;
 const MAX_PUBLIC_ROOMS = 30;
@@ -55,9 +55,10 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   } catch (err) {
     console.error("rooms API error:", err);
+    resetRedis();
     if (req.method === "GET") {
       return res.status(200).json({ ok: true, rooms: [], _offline: true });
     }
-    return res.status(503).json({ ok: false, error: "Server temporarily unavailable. Please try again later." });
+    return res.status(503).json({ ok: false, error: "Matchmaking server unavailable. Please try again." });
   }
 };

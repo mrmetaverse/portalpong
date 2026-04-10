@@ -1,4 +1,4 @@
-const { getRedis } = require("../_redis");
+const { getRedis, resetRedis } = require("../_redis");
 
 const ROOM_TTL_SECONDS = 60 * 30;
 
@@ -46,6 +46,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("match/control API error:", err);
+    resetRedis();
     return res.status(200).json({ ok: true, _offline: true });
   }
 };

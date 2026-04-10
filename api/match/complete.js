@@ -1,4 +1,4 @@
-const { getRedis } = require("../_redis");
+const { getRedis, resetRedis } = require("../_redis");
 
 const inc = async (db, key, field, amount = 1) => {
   await db.hset(key, { [field]: 0 });
@@ -91,6 +91,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("match/complete API error:", err);
+    resetRedis();
     return res.status(200).json({ ok: true, _offline: true });
   }
 };

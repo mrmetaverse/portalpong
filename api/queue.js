@@ -1,4 +1,4 @@
-const { getRedis } = require("./_redis");
+const { getRedis, resetRedis } = require("./_redis");
 
 const QUEUE_KEY = "pp:queue";
 const MATCH_TTL = 120;
@@ -96,9 +96,10 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   } catch (err) {
     console.error("queue API error:", err);
+    resetRedis();
     if (req.method === "GET") {
       return res.status(200).json({ ok: true, matched: false, position: null, queueSize: 0, _offline: true });
     }
-    return res.status(503).json({ ok: false, error: "Server temporarily unavailable. Please try again later." });
+    return res.status(503).json({ ok: false, error: "Matchmaking server unavailable. Please try again." });
   }
 };
