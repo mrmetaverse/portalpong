@@ -57,6 +57,9 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   } catch (err) {
     console.error("player API error:", err);
-    return res.status(500).json({ ok: false, error: String(err.message || err) });
+    if (req.method === "GET") {
+      return res.status(200).json({ ok: true, player: null, _offline: true });
+    }
+    return res.status(200).json({ ok: true, player: { id: req.body?.id || "local", username: req.body?.username || "Player" }, _offline: true });
   }
 };

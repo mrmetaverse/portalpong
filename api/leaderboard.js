@@ -56,6 +56,6 @@ module.exports = async function handler(req, res) {
     });
   } catch (err) {
     console.error("leaderboard API error:", err);
-    return res.status(500).json({ ok: false, error: String(err.message || err) });
+    return res.status(200).json({ ok: true, leaderboards: { winsAll: [], goalsAll: [], winsPvp: [], goalsPvp: [] }, _offline: true });
   }
 };

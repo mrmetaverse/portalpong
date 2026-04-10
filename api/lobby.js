@@ -67,6 +67,9 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   } catch (err) {
     console.error("lobby API error:", err);
-    return res.status(500).json({ ok: false, error: String(err.message || err) });
+    if (req.method === "GET") {
+      return res.status(200).json({ ok: true, room: null, _offline: true });
+    }
+    return res.status(503).json({ ok: false, error: "Server temporarily unavailable. Please try again later." });
   }
 };

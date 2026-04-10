@@ -119,8 +119,8 @@ const WIN_SCORE = 7;
 const REMOTE_STALE_MS = 1600;
 const POWERUP_DURATION = 60 * 60; // 60 seconds at 60fps
 
-type PowerupType = 'tripleJump' | 'permaFlight' | 'tripleBlast' | 'reflector' | 'teleport' | 'doubleSize' | 'quarterSize' | 'homingShots';
-const ALL_POWERUPS: PowerupType[] = ['tripleJump', 'permaFlight', 'tripleBlast', 'reflector', 'teleport', 'doubleSize', 'quarterSize', 'homingShots'];
+type PowerupType = 'tripleJump' | 'permaFlight' | 'tripleBlast' | 'reflector' | 'teleport' | 'doubleSize' | 'quarterSize' | 'homingShots' | 'telekinesis';
+const ALL_POWERUPS: PowerupType[] = ['tripleJump', 'permaFlight', 'tripleBlast', 'reflector', 'teleport', 'doubleSize', 'quarterSize', 'homingShots', 'telekinesis'];
 const POWERUP_COLORS: Record<PowerupType, number> = {
   tripleJump: 0x22c55e,
   permaFlight: 0x06b6d4,
@@ -129,7 +129,8 @@ const POWERUP_COLORS: Record<PowerupType, number> = {
   teleport: 0xa855f7,
   doubleSize: 0xef4444,
   quarterSize: 0xfbbf24,
-  homingShots: 0xec4899
+  homingShots: 0xec4899,
+  telekinesis: 0x14b8a6
 };
 const POWERUP_LABELS: Record<PowerupType, string> = {
   tripleJump: 'Triple Jump',
@@ -139,7 +140,8 @@ const POWERUP_LABELS: Record<PowerupType, string> = {
   teleport: 'Teleport',
   doubleSize: 'Double Size',
   quarterSize: 'Mini Mode',
-  homingShots: 'Homing'
+  homingShots: 'Homing',
+  telekinesis: 'Telekinesis'
 };
 
 const buildRandom = (seed: number) => {
@@ -1033,6 +1035,12 @@ class Player {
   /** RPS damage multiplier vs the opponent's character */
   rpsMultiplier: number;
   characterType: CharacterType;
+  /** Telekinesis grab: frames remaining in current grab (-1 = not grabbing) */
+  tkGrabFrames: number;
+  /** Telekinesis cooldown frames before next grab */
+  tkCooldown: number;
+  /** Telekinesis visual beam line */
+  tkBeam: THREE.Line | null;
 
   constructor(
     scene: THREE.Scene,
@@ -1083,6 +1091,9 @@ class Player {
     this.mixer = null;
     this.animActions = {};
     this.currentAnimState = 'idle';
+    this.tkGrabFrames = -1;
+    this.tkCooldown = 0;
+    this.tkBeam = null;
     this.mesh.rotation.y = this.facing === 1 ? 0 : Math.PI;
 
     this.shieldMesh = new THREE.Mesh(
@@ -1139,6 +1150,9 @@ class Player {
 
     if (this.spellCooldown > 0) {
       this.spellCooldown -= 1;
+    }
+    if (this.tkCooldown > 0) {
+      this.tkCooldown -= 1;
     }
     this.shieldPulseTime += 0.11;
     if (this.jumpBufferFrames > 0) {
@@ -1736,7 +1750,8 @@ const POWERUP_ICON: Record<PowerupType, string> = {
   teleport:    '⬡',
   doubleSize:  '2×',
   quarterSize: '¼',
-  homingShots: '⊙'
+  homingShots: '⊙',
+  telekinesis: '🧠'
 };
 
 const PowerupBadge: React.FC<{ type: PowerupType; framesLeft: number }> = ({ type, framesLeft }) => {
@@ -1950,11 +1965,20 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
     };
     sizeRenderer();
 
-    const texture = new THREE.TextureLoader().load(`/${selectedBackground}.png`);
+    const texture = new THREE.Texture();
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.repeat.set(0.56, 0.66);
-    texture.colorSpace = THREE.SRGBColorSpace;
+    new THREE.ImageLoader().load(
+      `/${selectedBackground}.png`,
+      (image) => {
+        texture.image = image;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.needsUpdate = true;
+      },
+      undefined,
+      () => {}
+    );
 
     const setupParallax = (bounds: Bounds): ParallaxLayers => {
       const far = new THREE.Mesh(
@@ -2612,6 +2636,15 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       activePowerupPickups.forEach(p => p.collect());
       activePowerupPickups = [];
       mysteryBoxNextSpawnAt = Date.now() + 10000;
+      [player1, player2].forEach(p => {
+        p.tkGrabFrames = -1;
+        if (p.tkBeam) {
+          scene.remove(p.tkBeam);
+          p.tkBeam.geometry.dispose();
+          (p.tkBeam.material as THREE.Material).dispose();
+          p.tkBeam = null;
+        }
+      });
     };
     beginRoundCountdown();
 
@@ -2857,14 +2890,16 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       if (frame.castQueued) {
         if (!player.isFlying()) {
           const target = new THREE.Vector3(frame.aimX, frame.aimY, 0);
-          if (player.hasPowerup('teleport')) {
-            // Teleport: warp to aim location, no spell
+          if (player.hasPowerup('telekinesis') && player.tkGrabFrames < 0 && player.tkCooldown <= 0) {
+            player.tkGrabFrames = 60;
+            player.tkCooldown = 90;
+          } else if (player.hasPowerup('teleport')) {
             if (player.spellCooldown <= 0) {
               player.mesh.position.set(frame.aimX, Math.max(frame.aimY, 0.44), 0);
               player.velocity.set(0, 0, 0);
               player.spellCooldown = 22;
             }
-          } else {
+          } else if (player.tkGrabFrames < 0) {
             const homingTargets = player.hasPowerup('homingShots')
               ? [{ position: ball.mesh.position }, { position: (player.id === 'player1' ? player2 : player1).mesh.position }]
               : undefined;
@@ -3260,6 +3295,45 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       player2.update(platforms, worldHalfWidth);
       ball.update(gameHeight, worldHalfWidth, platforms);
 
+      [player1, player2].forEach((player) => {
+        const frame = player === activePlayer ? localInput : remoteInput;
+        if (player.tkGrabFrames > 0) {
+          player.tkGrabFrames -= 1;
+          const aimTarget = new THREE.Vector3(frame.aimX, frame.aimY, 0);
+          const toBall = new THREE.Vector3().subVectors(aimTarget, ball.mesh.position);
+          const pullStrength = 0.12;
+          ball.velocity.x += toBall.x * pullStrength;
+          ball.velocity.y += toBall.y * pullStrength;
+          ball.velocity.x *= 0.88;
+          ball.velocity.y *= 0.88;
+
+          if (!player.tkBeam) {
+            const beamGeo = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(), new THREE.Vector3()
+            ]);
+            const beamMat = new THREE.LineBasicMaterial({
+              color: 0x14b8a6,
+              transparent: true,
+              opacity: 0.7,
+              linewidth: 2
+            });
+            player.tkBeam = new THREE.Line(beamGeo, beamMat);
+            scene.add(player.tkBeam);
+          }
+          const positions = player.tkBeam.geometry.attributes.position as THREE.BufferAttribute;
+          positions.setXYZ(0, player.mesh.position.x, player.mesh.position.y + 0.5, 0.1);
+          positions.setXYZ(1, ball.mesh.position.x, ball.mesh.position.y, 0.1);
+          positions.needsUpdate = true;
+          const fade = player.tkGrabFrames / 60;
+          (player.tkBeam.material as THREE.LineBasicMaterial).opacity = 0.7 * fade;
+        } else if (player.tkBeam) {
+          scene.remove(player.tkBeam);
+          player.tkBeam.geometry.dispose();
+          (player.tkBeam.material as THREE.Material).dispose();
+          player.tkBeam = null;
+        }
+      });
+
       activeSpells = activeSpells.filter((spell) => !spell.update(platforms, ball, worldHalfWidth));
 
       const chainSpawns: Spell[] = [];
@@ -3461,6 +3535,14 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       activeSpells.forEach((spell) => spell.cleanup());
       activeMysteryBoxes.forEach(b => b.cleanup());
       activePowerupPickups.forEach(p => p.collect());
+      [player1, player2].forEach(p => {
+        if (p.tkBeam) {
+          scene.remove(p.tkBeam);
+          p.tkBeam.geometry.dispose();
+          (p.tkBeam.material as THREE.Material).dispose();
+          p.tkBeam = null;
+        }
+      });
       currentMount?.removeChild(renderer.domElement);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
