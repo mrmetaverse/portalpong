@@ -1,15 +1,4 @@
-const { Redis } = require("@upstash/redis");
-
-let redis;
-function getRedis() {
-  if (!redis) {
-    redis = new Redis({
-      url: process.env.KV_REST_API_URL,
-      token: process.env.KV_REST_API_TOKEN,
-    });
-  }
-  return redis;
-}
+const { getRedis } = require("../_redis");
 
 const inc = async (db, key, field, amount = 1) => {
   await db.hset(key, { [field]: 0 });
