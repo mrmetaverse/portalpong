@@ -86,24 +86,51 @@ const ModelPreview = ({ modelPath, color }: { modelPath: string; color: string }
     let rafId = 0;
     let angle = 0;
 
-    const loader = new GLTFLoader();
-    loader.load(
-      modelPath,
-      (gltf) => {
-        modelObj = gltf.scene;
-        const box = new THREE.Box3().setFromObject(modelObj);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z);
-        modelObj.scale.setScalar(2.2 / maxDim);
-        modelObj.position.sub(center.multiplyScalar(2.2 / maxDim));
-        modelObj.position.y += 0.15;
-        scene.add(modelObj);
-        scene.remove(fallbackMesh);
-      },
-      undefined,
-      () => { /* keep fallback on error */ }
-    );
+    const themeCol = new THREE.Color(color);
+    const accentCol = themeCol.clone().lerp(new THREE.Color(0xffffff), 0.35);
+
+    const colorizeModel = (obj: THREE.Object3D) => {
+      let idx = 0;
+      obj.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          const col = idx % 3 === 2 ? accentCol : themeCol;
+          idx++;
+          const tinted = col.clone();
+          mesh.material = new THREE.MeshToonMaterial({
+            color: tinted,
+            emissive: tinted.clone().multiplyScalar(0.15),
+          });
+        }
+      });
+    };
+
+    const loadAndShow = (path: string) => {
+      const loader = new GLTFLoader();
+      loader.load(
+        path,
+        (gltf) => {
+          modelObj = gltf.scene;
+          colorizeModel(modelObj);
+          const box = new THREE.Box3().setFromObject(modelObj);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z);
+          modelObj.scale.setScalar(2.2 / maxDim);
+          modelObj.position.sub(center.multiplyScalar(2.2 / maxDim));
+          modelObj.position.y += 0.15;
+          scene.add(modelObj);
+          scene.remove(fallbackMesh);
+        },
+        undefined,
+        () => {
+          if (path !== modelPath) loadAndShow(modelPath);
+        }
+      );
+    };
+
+    const charId = modelPath.replace('/models/', '').replace('.glb', '');
+    loadAndShow(`/models/${charId}/rigged.glb`);
 
     const animate = () => {
       rafId = requestAnimationFrame(animate);
