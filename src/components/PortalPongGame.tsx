@@ -2233,6 +2233,9 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
     let mysteryBoxNextSpawnAt = Date.now() + 15000; // first spawn 15s in
     let boxIdCounter = 0;
     let pickupIdCounter = 0;
+    // Last authoritative ball state from player1, used for per-frame correction
+    let lastAuthBall: { x: number; y: number; vx: number; vy: number } | null = null;
+    let lastAuthBallAt = 0;
     let matchEnded = false;
     let pausedForMenu = false;
     let countdownEndAt = 0;
@@ -2822,15 +2825,13 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       if (localRole !== 'player2' || !payload.auth) return;
       const auth = payload.auth;
 
-      // Ball sync: lerp toward player1's ball, snap on large divergence
-      const dx = auth.ball.x - ball.mesh.position.x;
-      const dy = auth.ball.y - ball.mesh.position.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const LERP = dist > 2.5 ? 1 : 0.35;
-      ball.mesh.position.x += dx * LERP;
-      ball.mesh.position.y += dy * LERP;
-      ball.velocity.x += (auth.ball.vx - ball.velocity.x) * LERP;
-      ball.velocity.y += (auth.ball.vy - ball.velocity.y) * LERP;
+      // Ball sync: full snap to auth — local physics is continuously re-anchored each poll
+      ball.mesh.position.x = auth.ball.x;
+      ball.mesh.position.y = auth.ball.y;
+      ball.velocity.x = auth.ball.vx;
+      ball.velocity.y = auth.ball.vy;
+      lastAuthBall = { x: auth.ball.x, y: auth.ball.y, vx: auth.ball.vx, vy: auth.ball.vy };
+      lastAuthBallAt = performance.now();
 
       // Score sync: always authoritative — compare against local to detect goals/corrections
       const authP1 = Number(auth.score.p1) || 0;
@@ -3301,8 +3302,8 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       const remoteConnected = mergedConfig.mode === 'matchmaking' && nowMs - remoteLastSeenAt < REMOTE_STALE_MS;
       if (mergedConfig.mode === 'matchmaking') {
         const roomCode = (mergedConfig.matchmakingRoom ?? '').trim().toUpperCase();
-        const shouldSend = roomCode && nowMs - lastNetworkSendAt > 70 && !networkSendBusy;
-        const shouldPoll = roomCode && nowMs - lastNetworkPollAt > 120 && !networkPollBusy;
+        const shouldSend = roomCode && nowMs - lastNetworkSendAt > 50 && !networkSendBusy;
+        const shouldPoll = roomCode && nowMs - lastNetworkPollAt > 60 && !networkPollBusy;
 
         if (shouldSend) {
           networkSendBusy = true;
@@ -3409,6 +3410,24 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
       player1.update(platforms, worldHalfWidth);
       player2.update(platforms, worldHalfWidth);
       ball.update(gameHeight, worldHalfWidth, platforms);
+
+      // Per-frame ball correction toward auth extrapolation (player2 online only).
+      // Runs every frame — not just on poll — so drift is squeezed out continuously
+      // rather than waiting ~120ms for the next network event.
+      if (isP2Online && lastAuthBall !== null) {
+        const ageMs = nowMs - lastAuthBallAt;
+        if (ageMs < 300) {
+          const dt = ageMs / 1000;
+          // Linear extrapolation from last-known auth velocity
+          const targetX = lastAuthBall.x + lastAuthBall.vx * dt;
+          const targetY = lastAuthBall.y + lastAuthBall.vy * dt;
+          const PULL = 0.4;
+          ball.mesh.position.x += (targetX - ball.mesh.position.x) * PULL;
+          ball.mesh.position.y += (targetY - ball.mesh.position.y) * PULL;
+          ball.velocity.x += (lastAuthBall.vx - ball.velocity.x) * PULL;
+          ball.velocity.y += (lastAuthBall.vy - ball.velocity.y) * PULL;
+        }
+      }
 
       [player1, player2].forEach((player) => {
         const frame = player === activePlayer ? localInput : remoteInput;
