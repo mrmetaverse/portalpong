@@ -3300,6 +3300,7 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
       const nowMs = performance.now();
       const remoteConnected = mergedConfig.mode === 'matchmaking' && nowMs - remoteLastSeenAt < REMOTE_STALE_MS;
+      const isP2Online = mergedConfig.mode === 'matchmaking' && localRole === 'player2';
       if (mergedConfig.mode === 'matchmaking') {
         const roomCode = (mergedConfig.matchmakingRoom ?? '').trim().toUpperCase();
         const shouldSend = roomCode && nowMs - lastNetworkSendAt > 50 && !networkSendBusy;
@@ -3554,8 +3555,6 @@ const PortalPongGame: React.FC<PortalPongGameProps> = ({ config, onExit, onMatch
 
       // ── Mystery box spawn (player1 / offline only — player2 syncs from auth) ──
       const now = Date.now();
-      // player2 in matchmaking ALWAYS defers to player1's auth — no local simulation
-      const isP2Online = mergedConfig.mode === 'matchmaking' && localRole === 'player2';
       if (!isP2Online && !matchEnded && !pausedForMenu && activeMysteryBoxes.length === 0 && activePowerupPickups.length === 0 && now >= mysteryBoxNextSpawnAt) {
         const bx = (Math.random() - 0.5) * (worldHalfWidth * 1.1);
         const by = 1.8 + Math.random() * 3.2;
