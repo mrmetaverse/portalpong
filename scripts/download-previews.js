@@ -15,7 +15,7 @@ if (!API_KEY && fs.existsSync(envPath)) {
   if (m) API_KEY = m[1];
 }
 if (!API_KEY) { console.error('❌ MESH_API_KEY not found'); process.exit(1); }
-console.log('✅ API key:', API_KEY.slice(0, 12) + '…');
+console.log('✅ API key loaded');
 
 const MODELS_DIR = path.join(__dirname, '..', 'public', 'models');
 if (!fs.existsSync(MODELS_DIR)) fs.mkdirSync(MODELS_DIR, { recursive: true });
